@@ -73,48 +73,70 @@ local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 ```lua
 local Replicated = game:GetService("ReplicatedStorage")
 local Remote = Replicated.RemoteEvent
+local Bnum = require(Replicated.Bnum)
 local EventBus = require(Replicated.NetworkHandler.EventBus)
 local Players = game:GetService("Players")
 
 local bus = EventBus.new(Remote)
 local playerStats = {}
 
-bus:Connect(1, function(player: Player, clickAmount: number)
-    playerStats[player.UserId] = playerStats[player.UserId] or {}
-    playerStats[player.UserId].Click = (playerStats[player.UserId].Click or 0) + clickAmount
+bus:Connect(1, function(player: Player, update)
+	local userId = player.UserId
 
-    bus:SetLatest(1, playerStats[player.UserId].Click, player)
-    print(player.Name, "Clicks:", playerStats[player.UserId].Click)
+	if not playerStats[userId] then
+		playerStats[userId] = {
+			Click = 0,
+			CanClick = false
+		}
+	end
+
+	local current = playerStats[userId].Click + update
+	playerStats[userId].Click = current
+
+	bus:SetLatest(1, playerStats[userId].Click, player)
+
+	print(player.Name, `Clicks: {playerStats[userId].Click}`)
+	print(`Server Packet size: {bus:formatBytes()}`)
 end)
 
-Remote.OnServerEvent:Connect(function(player, data, bitLength)
-    bus:decode(player, data, bitLength)
+Remote.OnServerEvent:Connect(function(player, data, bit)
+	bus:decode(player, data, bit)
 end)
 ```
 
 ### Client-Side: UI Updates
 
 ```lua
-local Replicated = game:GetService("ReplicatedStorage")
+local Replicated = game:GetService('ReplicatedStorage')
 local Remote = Replicated.RemoteEvent
+local Bnum = require(Replicated.Bnum)
 local EventBus = require(Replicated.NetworkHandler.EventBus)
-local Players = game:GetService("Players")
+local Players = game:GetService('Players')
 local player = Players.LocalPlayer
 local TextButton = script.Parent.TextButton
 
 local bus = EventBus.new(Remote)
-TextButton.Text = "Clicks: 0"
 
-bus:Connect(1, function(clicks: number)
-    TextButton.Text = "Clicks: " .. clicks
+bus._net.EventHandler = function(_player, id, ...)
+	local signal = bus._signals[id]
+	if signal then
+		signal:Fire(...)
+	end
+end
+
+TextButton.Text = 'Clicks: 0'
+
+bus:Connect(1, function(update)
+	TextButton.Text = `Clicks: {update}`
 end)
 
 TextButton.MouseButton1Click:Connect(function()
-    bus:Fire(1, 1)
+	bus:Fire(1, 1)
+	print(`Client Packet Size: {bus._net:byteFormat(bus._net:bitLen())}`)
 end)
 
-Remote.OnClientEvent:Connect(function(data, bitLength)
-    bus:decode(player, data, bitLength)
+Remote.OnClientEvent:Connect(function(data, bit)
+	bus:decode(player, data, bit)
 end)
 ```
 
