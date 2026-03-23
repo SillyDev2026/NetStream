@@ -50,7 +50,7 @@ ReplicatedStorage/
  │    ├── Modules/
  │    │     ├── BitBuffer.lua
  │    │     └── Signal.lua
- │    └── Promise.lua
+ |    |          └── Promise.lua
 ```
 
 Require modules where needed:
