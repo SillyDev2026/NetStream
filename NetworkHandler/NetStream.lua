@@ -21,6 +21,8 @@ export type NetStream = {
 	state: { [number]: number },
 	running: boolean,
 	TargetPlayer: any?,
+	EventHandler: <T...>((player: Player, id: number, T...) -> ()) -> (),
+	_lastBuffer: any?,
 	start: (self: NetStream) -> (),
 	stop: (self: NetStream) -> (),
 	move: (self: NetStream, x: number, y: number, z: number) -> (),
@@ -28,7 +30,12 @@ export type NetStream = {
 	stateUpdate: (self: NetStream, id: number, value: number) -> (),
 	event: <T...>(self: NetStream, T...) -> (),
 	setLatest: (self: NetStream, id: number, value: number) -> (),
-	decode: (player: any, data: { number }, bitLength: number) -> (),
+	decode: (self: NetStream, player: any, data: { number }, bitLength: number) -> (),
+	_flush: (self: NetStream, isServer: boolean?) -> (),
+	getPlayerState: (player: any) -> PlayerState,
+	bitLen: (self: NetStream) -> number,
+	byteLen: (self: NetStream) -> number,
+	byteFormat: (self: NetStream, bits: number) -> string,
 }
 
 local Bitbuff = require(script.Parent.Modules.BitBuffer)
@@ -44,27 +51,27 @@ local OFFSET = 32768
 
 local PlayerStates: { [any]: PlayerState } = {}
 
-local function q(n: number): number
+function q(n: number): number
 	return math.floor(n * SCALE + 0.5)
 end
 
-local function createRing<T>(size: number): Ring<T>
+function createRing<T>(size: number): Ring<T>
 	return { data = table.create(size, nil), head = 1, tail = 1, size = size }
 end
 
-local function push<T>(ring: Ring<T>, v: T)
+function push<T>(ring: Ring<T>, v: T)
 	ring.data[ring.tail] = v
 	ring.tail = (ring.tail % ring.size) + 1
 end
 
-local function pop<T>(ring: Ring<T>): T?
+function pop<T>(ring: Ring<T>): T?
 	if ring.head == ring.tail then return nil end
 	local v = ring.data[ring.head]
 	ring.head = (ring.head % ring.size) + 1
 	return v
 end
 
-local function count<T>(ring: Ring<T>): number
+function count<T>(ring: Ring<T>): number
 	return (ring.tail - ring.head + ring.size) % ring.size
 end
 
@@ -130,7 +137,7 @@ function NetStreamClass:_flush(isServer: boolean?)
 		buff:write({OP_LATEST, k, v})
 	end
 	table.clear(self.latest)
-
+	
 	local data, bitLength = buff:getData()
 	self._lastBuffer = buff
 
@@ -159,16 +166,15 @@ function NetStreamClass:stop()
 	self.running = false
 end
 
-function NetStreamClass:decode(player: any, data: { number }, bitLength: number)
+function NetStreamClass:decode(player: any, data: {number}, bitLength: number)
 	local buff = Bitbuff.new()
-	buff.data = data
-	buff.bitPos = 0
+	buff:setData(data, bitLength)
 	self._lastBuffer = buff
 
 	PlayerStates[player] = PlayerStates[player] or {}
 	local state: PlayerState = PlayerStates[player]
 
-	while buff.bitPos < bitLength do
+	while buff.readPos < bitLength do
 		local packet = buff:read()
 		if not packet then break end
 
