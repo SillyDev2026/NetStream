@@ -310,4 +310,8 @@ function BitBuffer:setData(data, bitLength)
 	self.writePos = bitLength or (#data * 32)
 end
 
+function BitBuffer:byteLen()
+	return math.ceil(self.writePos/8)
+end
+
 return BitBuffer
