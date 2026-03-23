@@ -90,4 +90,13 @@ function EventBus:decode(player: Player, data: {any}, bitLength: number)
 	return self._net:decode(player, data, bitLength)
 end
 
+function EventBus:len()
+	return self._net:byteLen()
+end
+
+function EventBus:formatBytes()
+	local bits = self._net:bitLen()
+	return self._net:byteFormat(bits)
+end
+
 return EventBus
