@@ -33,15 +33,14 @@ export type NetStream = {
 
 local Bitbuff = require(script.Parent.Modules.BitBuffer)
 
-local OP_MOVE    = 1
-local OP_STATE   = 2
-local OP_EVENT   = 3
-local OP_LATEST  = 4
+local OP_MOVE = 1
+local OP_STATE = 2
+local OP_EVENT = 3
+local OP_LATEST = 4
 
 local SCALE = 100
 local INV_SCALE = 1 / SCALE
 local OFFSET = 32768
-
 local DEBUG = false
 
 local PlayerStates: { [any]: PlayerState } = {}
