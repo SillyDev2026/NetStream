@@ -65,12 +65,10 @@ function EventBus:SetLatest(eventId: number, value: number, targetPlayer: Player
 	end
 end
 
--- Update player state
 function EventBus:StateUpdate(id: number, value: number)
 	self._net:stateUpdate(id, value)
 end
 
--- Movement helpers
 function EventBus:Move(x: number, y: number, z: number)
 	self._net:move(x, y, z)
 end
