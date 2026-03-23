@@ -4,7 +4,6 @@
 local BitBuffer = {}
 BitBuffer.__index = BitBuffer
 
--- Zigzag encoding/decoding for 32-bit signed integers
 function zigzagEncode(n: number): number
 	return bit32.bxor(bit32.lshift(n, 1), bit32.rshift(n, 31))
 end
@@ -13,7 +12,6 @@ function zigzagDecode(n: number): number
 	return bit32.bxor(bit32.rshift(n, 1), -bit32.band(n, 1))
 end
 
--- Helper to create zero-initialized array
 function createArray(size: number): {number}
 	local t: {number} = {}
 	for i = 1, size do
