@@ -68,75 +68,77 @@ local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
 ## Usage Examples
 
-### Server-Side: Click Tracker
+### Server-Side: Example prints 5 b for 5 bits on a boolean
 
 ```lua
-local Replicated = game:GetService("ReplicatedStorage")
-local Remote = Replicated.RemoteEvent
-local Bnum = require(Replicated.Bnum)
-local EventBus = require(Replicated.NetworkHandler.EventBus)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local EventBusModule = require(ReplicatedStorage:WaitForChild("NetworkHandler"):WaitForChild("EventBus"))
+local Bnum = require(ReplicatedStorage.Bnum)
 
-local bus = EventBus.new(Remote)
-local playerStats = {}
+local GameEvent = ReplicatedStorage:WaitForChild("GameEvents")
+local EventBus = EventBusModule.new(GameEvent)
 
-bus:Connect(1, function(player: Player, update)
-	local userId = player.UserId
-
-	if not playerStats[userId] then
-		playerStats[userId] = {
-			Click = 0,
-			CanClick = false
-		}
-	end
-
-	local current = playerStats[userId].Click + update
-	playerStats[userId].Click = current
-
-	bus:SetLatest(1, playerStats[userId].Click, player)
-
-	print(player.Name, `Clicks: {playerStats[userId].Click}`)
-	print(`Server Packet size: {bus:formatBytes()}`)
+-- decodes data
+GameEvent.OnServerEvent:Connect(function(player, data, bitLength)
+	EventBus:decode(player, data, bitLength)
 end)
 
-Remote.OnServerEvent:Connect(function(player, data, bit)
-	bus:decode(player, data, bit)
+local isFalse = false
+
+-- able to handle the decode to send back to client
+EventBus:Connect(1, function(player, data)
+	isFalse = data
+	print(player.Name, "its true now:", isFalse)
+	EventBus:SetLatest(1, isFalse, player)
+	print(`Server Packet: {EventBus:formatBytes()}`)
 end)
 ```
 
 ### Client-Side: UI Updates
 
 ```lua
-local Replicated = game:GetService('ReplicatedStorage')
-local Remote = Replicated.RemoteEvent
-local Bnum = require(Replicated.Bnum)
-local EventBus = require(Replicated.NetworkHandler.EventBus)
-local Players = game:GetService('Players')
+-- StarterPlayerScripts/ClickClient.lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local EventBusModule = require(ReplicatedStorage:WaitForChild("NetworkHandler"):WaitForChild("EventBus"))
+
 local player = Players.LocalPlayer
-local TextButton = script.Parent.TextButton
+local GameEvent = ReplicatedStorage:WaitForChild("GameEvents")
 
-local bus = EventBus.new(Remote)
+--[[
+old way of sending data from client to server now its automatic
 
-bus._net.EventHandler = function(_player, id, ...)
-	local signal = bus._signals[id]
+self._net.EventHandler = function(player: Player, id: number, ...)
+	local signal = self._signals[id]
 	if signal then
-		signal:Fire(...)
+		signal:Fire(player, ...)
 	end
 end
+]]
+local EventBus = EventBusModule.new(GameEvent)
 
-TextButton.Text = 'Clicks: 0'
+local TextButton = script.Parent.TextButton
 
-bus:Connect(1, function(update)
-	TextButton.Text = `Clicks: {update}`
+-- this part to be able to decode so :Connect -- works
+GameEvent.OnClientEvent:Connect(function(data, bitLength)
+	EventBus:decode(player, data, bitLength)
+end)
+
+-- connects Client to Server send data back
+EventBus:Connect(1, function(_, total)
+	TextButton.Text = `this cant be true: {total}`
+
+	print(`Client Packets: {EventBus:formatBytes()}`)
 end)
 
 TextButton.MouseButton1Click:Connect(function()
-	bus:Fire(1, 1)
-	print(`Client Packet Size: {bus._net:byteFormat(bus._net:bitLen())}`)
-end)
+	-- sends arg with id to server
+	EventBus:Fire(1, true)
+	
+	-- _flush to push packet to server
+	EventBus._net:_flush(false)
 
-Remote.OnClientEvent:Connect(function(data, bit)
-	bus:decode(player, data, bit)
 end)
 ```
 
@@ -219,7 +221,8 @@ end)
 ## Download here
 u will be able to access the full module without manually copy and paste and yes i did zip the module there is 0 worry about backdoors since im a dev who wants to push newer features out that are fun to use and ez without doing much overhead any suggestions join my Discord
 
-updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26197335/NetworkHandler.zip)
+updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26204072/NetworkHandler.zip)
+
 
 
 This module offers a robust, performant foundation for building scalable, event-driven multiplayer experiences on Roblox.
