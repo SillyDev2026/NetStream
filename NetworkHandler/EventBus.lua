@@ -5,22 +5,25 @@ local NetStream = require(script.Parent.NetStream)
 local Signal = require(script.Parent.Modules.Signal)
 local Players = game:GetService("Players")
 
-type EventCallback<T...> = (T...) -> ()
+type EventCallback = (player: Player?, ...any) -> ()
 
 local EventBus = {}
 EventBus.__index = EventBus
 
-type Sign<T...> = Signal.Signal<T...>
+type SignalMap = { [number]: Signal.Signal<any> }
 
-function EventBus.new<Arg...>(remote)
-	assert(remote, 'RemoteEvent or RemoteFunction required')
+function EventBus.new(remote)
+	assert(remote, "RemoteEvent or RemoteFunction required")
+
 	local self = setmetatable({
 		_net = NetStream.new(remote),
-		_signals = {} :: {[number]: Signal.Signal<Sign<Arg...>>},
+		_signals = {} :: SignalMap,
 	}, EventBus)
 
+	-- Start network loop
 	self._net:start()
 
+	-- Bind incoming events
 	self._net.EventHandler = function(player: Player, id: number, ...)
 		local signal = self._signals[id]
 		if signal then
@@ -31,30 +34,35 @@ function EventBus.new<Arg...>(remote)
 	return self
 end
 
--- Subscribe to an event
-function EventBus:Connect<Arg...>(eventId: number, callback: EventCallback<Arg...>)
-	if not self._signals[eventId] then
-		self._signals[eventId] = Signal.new()
+-- Subscribe
+function EventBus:Connect(eventId: number, callback: EventCallback)
+	local sig = self._signals[eventId]
+	if not sig then
+		sig = Signal.new()
+		self._signals[eventId] = sig
 	end
-	return self._signals[eventId]:Connect(callback)
+	return sig:Connect(callback)
 end
 
 -- Subscribe once
-function EventBus:Once<Arg...>(eventId: number, callback: EventCallback<Arg...>)
-	if not self._signals[eventId] then
-		self._signals[eventId] = Signal.new()
+function EventBus:Once(eventId: number, callback: EventCallback)
+	local sig = self._signals[eventId]
+	if not sig then
+		sig = Signal.new()
+		self._signals[eventId] = sig
 	end
-	return self._signals[eventId]:Once(callback)
+	return sig:Once(callback)
 end
 
--- Fire an event (client -> server)
-function EventBus:Fire(eventId: number, ...)
+-- Fire event (client -> server OR server -> client via NetStream)
+function EventBus:Fire(eventId: number, ...: any)
 	self._net:event(eventId, ...)
 end
 
--- Set the latest value (server -> client)
+-- Send latest value (server authoritative push)
 function EventBus:SetLatest(eventId: number, value: number, targetPlayer: Player?)
 	self._net:setLatest(eventId, value)
+
 	if targetPlayer then
 		self._net.TargetPlayer = targetPlayer
 		self._net:_flush(true)
@@ -64,10 +72,12 @@ function EventBus:SetLatest(eventId: number, value: number, targetPlayer: Player
 	end
 end
 
+-- State sync
 function EventBus:StateUpdate(id: number, value: number)
 	self._net:stateUpdate(id, value)
 end
 
+-- Movement helpers
 function EventBus:Move(x: number, y: number, z: number)
 	self._net:move(x, y, z)
 end
@@ -76,24 +86,33 @@ function EventBus:MoveVec(pos: Vector3)
 	self._net:moveVec(pos)
 end
 
+-- Stop everything
 function EventBus:Stop()
 	self._net:stop()
+
 	for _, sig in pairs(self._signals) do
 		sig:DisconnectAll()
 	end
+
+	table.clear(self._signals)
 end
 
-function EventBus:decode(player: Player, data: {any}, bitLength: number)
+-- Decode incoming buffer
+function EventBus:decode(player: Player, data: buffer, bitLength: number)
+	if not data or bitLength <= 0 then
+		return
+	end
+
 	return self._net:decode(player, data, bitLength)
 end
 
-function EventBus:len()
+-- Debug helpers
+function EventBus:len(): number
 	return self._net:byteLen()
 end
 
-function EventBus:formatBytes()
-	local bits = self._net:bitLen()
-	return self._net:byteFormat(bits)
+function EventBus:formatBytes(): string
+	return self._net:byteFormat(self._net:bitLen())
 end
 
 return EventBus
