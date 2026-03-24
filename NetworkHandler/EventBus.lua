@@ -50,7 +50,6 @@ end
 -- Fire an event (client -> server)
 function EventBus:Fire(eventId: number, ...)
 	self._net:event(eventId, ...)
-	self._net:_flush(false)
 end
 
 -- Set the latest value (server -> client)
