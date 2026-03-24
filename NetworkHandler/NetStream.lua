@@ -32,7 +32,7 @@ export type NetStream = {
 	stateUpdate: (self: NetStream, id: number, value: number) -> (),
 	event: <T...>(self: NetStream, T...) -> (),
 	setLatest: (self: NetStream, id: number, value: number) -> (),
-	decode: (self: NetStream, player: any, data: { number }, bitLength: number) -> (),
+	decode: (self: NetStream, player: any, data: buffer, bitLength: number) -> (),
 	_flush: (self: NetStream, isServer: boolean?) -> (),
 	getPlayerState: (player: any) -> PlayerState,
 	bitLen: (self: NetStream) -> number,
@@ -134,7 +134,7 @@ function NetStreamClass:event(id: number, ...: any)
 end
 
 function NetStreamClass:_flush(isServer: boolean?)
-	local buff = Bitbuff.new(64)
+	local buff = Bitbuff.new(128)
 
 	while true do
 		local packet = pop(self.reliable)
@@ -155,8 +155,8 @@ function NetStreamClass:_flush(isServer: boolean?)
 		buff:write({OP_LATEST, k, v})
 	end
 	table.clear(self.latest)
-
-	local data, bitLength = buff:getData()
+	local data = buff:getBuffer()
+	local bitLength = buff.writePos
 	self._lastBuffer = buff
 
 	if bitLength > 0 then
@@ -184,9 +184,9 @@ function NetStreamClass:stop()
 	self.running = false
 end
 
-function NetStreamClass:decode(player: any, data: {number}, bitLength: number)
+function NetStreamClass:decode(player: any, data: buffer, bitLength: number)
 	local buff = Bitbuff.new()
-	buff:setData(data, bitLength)
+	buff:setBuffer(data, bitLength)
 	self._lastBuffer = buff
 
 	PlayerStates[player] = PlayerStates[player] or {}
