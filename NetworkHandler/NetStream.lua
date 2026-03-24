@@ -1,6 +1,8 @@
 --!native
 --!optimize 2
 
+local dataTypes = {'string', 'bool', 'float', 'int'}
+
 export type Ring<T> = {
 	data: { T },
 	head: number,
@@ -111,11 +113,24 @@ function NetStreamClass:setLatest(id: number, value: number)
 	self.latest[id] = value
 end
 
-function NetStreamClass:event<T...>(...: T...)
+function NetStreamClass:event(id: number, ...: any)
+	local packet = {OP_EVENT, id}
 	local args = {...}
-	local id = args[1]
-	table.remove(args, 1)
-	push(self.reliable, {OP_EVENT, id, args})
+	for i = 1, #args do
+		local v = args[i]
+		if typeof(v) == "Vector3" then
+			packet[#packet+1] = q(v.X)
+			packet[#packet+1] = q(v.Y)
+			packet[#packet+1] = q(v.Z)
+		elseif typeof(v) == "number" or typeof(v) == "boolean" then
+			packet[#packet+1] = v
+		elseif typeof(v) == "string" then
+			packet[#packet+1] = v
+		else
+			warn("Unsupported type for network event:", typeof(v))
+		end
+	end
+	push(self.reliable, packet)
 end
 
 function NetStreamClass:_flush(isServer: boolean?)
@@ -125,6 +140,9 @@ function NetStreamClass:_flush(isServer: boolean?)
 		local packet = pop(self.reliable)
 		if not packet then break end
 		buff:write(packet)
+		for i = 3, #packet do
+			packet[i] = nil
+		end
 	end
 
 	while true do
@@ -137,7 +155,7 @@ function NetStreamClass:_flush(isServer: boolean?)
 		buff:write({OP_LATEST, k, v})
 	end
 	table.clear(self.latest)
-	
+
 	local data, bitLength = buff:getData()
 	self._lastBuffer = buff
 
@@ -155,7 +173,7 @@ function NetStreamClass:start()
 	self.running = true
 	task.spawn(function()
 		while self.running do
-			self:_flush()
+			self:_flush(true)
 			local load = count(self.reliable) + count(self.unreliable)
 			task.wait(load > 200 and 0.02 or load > 50 and 0.04 or 0.08)
 		end
@@ -191,9 +209,8 @@ function NetStreamClass:decode(player: any, data: {number}, bitLength: number)
 
 		elseif op == OP_EVENT then
 			local id = packet[2]
-			local args = packet[3]
 			if self.EventHandler then
-				self.EventHandler(player, id, table.unpack(args))
+				self.EventHandler(player, id, table.unpack(packet, 3))
 			end
 
 		elseif op == OP_LATEST then
