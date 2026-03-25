@@ -8,6 +8,42 @@ local Unreliable = script.Parent.Remotes.Unreliable
 local Players = game:GetService("Players")
 local RunService = game:GetService('RunService')
 
+function getEvent(name: string, unreliable: boolean)
+	local isServer = RunService:IsServer()
+
+	local remoteFolder = script.Parent:FindFirstChild("Remotes")
+
+	if not remoteFolder then
+		if isServer then
+			remoteFolder = Instance.new("Folder")
+			remoteFolder.Name = "Remotes"
+			remoteFolder.Parent = script.Parent
+		else
+			remoteFolder = script.Parent:WaitForChild("Remotes")
+		end
+	end
+
+	local remote = remoteFolder:FindFirstChild(name)
+	if not remote then
+		if isServer then
+			remote = Instance.new(unreliable and "UnreliableRemoteEvent" or "RemoteEvent")
+			remote.Name = name
+			remote.Parent = remoteFolder
+		else
+			remote = remoteFolder:WaitForChild(name)
+		end
+	end
+	return remote
+end
+
+function getReliable()
+	return getEvent('Reliable', false)
+end
+
+function getUnreliable()
+	return getEvent('Unreliable', true)
+end
+
 type EventCallback = (player: Player?, ...any) -> ()
 
 local EventBus = {}
@@ -36,11 +72,11 @@ function EventBus.new(remote: RemoteEvent | UnreliableRemoteEvent)
 end
 
 function EventBus.Remote()
-	return EventBus.new(Reliable)
+	return EventBus.new(getReliable())
 end
 
 function EventBus.Unreliable()
-	return EventBus.new(Unreliable)
+	return EventBus.new(getUnreliable())
 end
 
 -- Subscribe
