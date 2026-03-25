@@ -104,7 +104,7 @@ new:Connect(1, function(player, data)
 end)
 
 -- decodes the buffer that was sent from Client
-new:OnConnect()
+--new:OnConnect()
 ```
 
 ### Client-Side: UI Updates
@@ -136,10 +136,11 @@ new:Connect(1, function(_, data) -- dont need to worry about the player arg
 	
 	-- this part is able to tell u about ur bits on packet
 	print(`Client Packet: {new:formatBytes()}`)
-end)
+end) -- Connect automatically can decode for u
 
 -- able to get from u as in the player if its smth else it will track it automatically kinda
-new:OnConnect()
+-- old way
+--new:OnConnect()
 --[[
 old way
 GameEvent.OnClientEvent:Connect(function(player, data, bits)
@@ -231,7 +232,8 @@ end)
 ## Download here
 u will be able to access the full module without manually copy and paste and yes i did zip the module there is 0 worry about backdoors since im a dev who wants to push newer features out that are fun to use and ez without doing much overhead any suggestions join my Discord
 
-updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26234108/NetworkHandler.zip)
+updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26234601/NetworkHandler.zip)
+
 
 
 
