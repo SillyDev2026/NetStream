@@ -3,7 +3,10 @@
 
 local NetStream = require(script.Parent.NetStream)
 local Signal = require(script.Parent.Modules.Signal)
+local Reliable = script.Parent.Remotes.Reliable
+local Unreliable = script.Parent.Remotes.Unreliable
 local Players = game:GetService("Players")
+local RunService = game:GetService('RunService')
 
 type EventCallback = (player: Player?, ...any) -> ()
 
@@ -12,18 +15,16 @@ EventBus.__index = EventBus
 
 type SignalMap = { [number]: Signal.Signal<any> }
 
-function EventBus.new(remote)
+function EventBus.new(remote: RemoteEvent | UnreliableRemoteEvent)
 	assert(remote, "RemoteEvent or RemoteFunction required")
 
 	local self = setmetatable({
 		_net = NetStream.new(remote),
 		_signals = {} :: SignalMap,
 	}, EventBus)
-
-	-- Start network loop
+	
 	self._net:start()
-
-	-- Bind incoming events
+	
 	self._net.EventHandler = function(player: Player, id: number, ...)
 		local signal = self._signals[id]
 		if signal then
@@ -32,6 +33,14 @@ function EventBus.new(remote)
 	end
 
 	return self
+end
+
+function EventBus.Remote()
+	return EventBus.new(Reliable)
+end
+
+function EventBus.Unreliable()
+	return EventBus.new(Unreliable)
 end
 
 -- Subscribe
@@ -113,6 +122,20 @@ end
 
 function EventBus:formatBytes(): string
 	return self._net:byteFormat(self._net:bitLen())
+end
+
+function EventBus:OnConnect()
+	local remote = self._net.remote
+	if RunService:IsServer() then
+		return remote.OnServerEvent:Connect(function(player: Player, data: buffer, bits: number)
+			self:decode(player, data, bits)
+		end)
+	else
+		local player = Players.LocalPlayer
+		return remote.OnClientEvent:Connect(function(data, bits)
+			self:decode(player, data, bits)
+		end)
+	end
 end
 
 return EventBus
