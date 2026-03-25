@@ -86,6 +86,7 @@ function EventBus:Connect(eventId: number, callback: EventCallback)
 		sig = Signal.new()
 		self._signals[eventId] = sig
 	end
+	self:OnConnect()
 	return sig:Connect(callback)
 end
 
