@@ -18,7 +18,7 @@ function BitBuffer.new(size: number?)
 	local self = setmetatable({}, BitBuffer)
 	self.buffer = BufferUtil.new(size or 64)
 	self.writePos = 0
-	self.readPos = 0 
+	self.readPos = 0
 	return self
 end
 
@@ -32,19 +32,31 @@ function BitBuffer:_ensure(byteIndex: number)
 	end
 end
 
+function BitBuffer:alignToByte()
+	if self.writePos % 8 ~= 0 then
+		self.writePos += (8 - (self.writePos % 8))
+	end
+end
+
+function BitBuffer:alignReadToByte()
+	if self.readPos % 8 ~= 0 then
+		self.readPos += (8 - (self.readPos % 8))
+	end
+end
+
 function BitBuffer:writeBits(value: number, bits: number)
 	assert(bits <= 32)
 
 	if bits == 8 and (self.writePos % 8 == 0) then
-		local index = (self.writePos // 8)
+		local index = self.writePos // 8
 		self:_ensure(index + 1)
-		buffer.writeu8(self.buffer, index, bit32.band(value, 0xFF))
+		BufferUtil.write(self.buffer, "u8", index, bit32.band(value, 0xFF))
 		self.writePos += 8
 		return
 	end
 
 	local bitPos = self.writePos
-	local index = math.floor(bitPos / 8)
+	local index = bitPos // 8
 	local offset = bitPos % 8
 
 	self:_ensure(index + 4)
@@ -55,7 +67,7 @@ function BitBuffer:writeBits(value: number, bits: number)
 	local shift = 0
 
 	while remaining > 0 do
-		local byte = buffer.readu8(self.buffer, index)
+		local byte = BufferUtil.read(self.buffer, "u8", index)
 
 		local writeBits = math.min(8 - offset, remaining)
 		local mask = bit32.lshift(bit32.lshift(1, writeBits) - 1, offset)
@@ -63,7 +75,7 @@ function BitBuffer:writeBits(value: number, bits: number)
 		byte = bit32.band(byte, bit32.bnot(mask))
 		byte = bit32.bor(byte, bit32.lshift(bit32.extract(value, shift, writeBits), offset))
 
-		buffer.writeu8(self.buffer, index, byte)
+		BufferUtil.write(self.buffer, "u8", index, byte)
 
 		remaining -= writeBits
 		shift += writeBits
@@ -76,14 +88,15 @@ end
 
 function BitBuffer:readBits(bits: number): number
 	assert(bits <= 32)
+
 	if bits == 8 and (self.readPos % 8 == 0) then
-		local index = (self.readPos // 8)
+		local index = self.readPos // 8
 		self.readPos += 8
-		return buffer.readu8(self.buffer, index)
+		return BufferUtil.read(self.buffer, "u8", index)
 	end
 
 	local bitPos = self.readPos
-	local index = math.floor(bitPos / 8)
+	local index = bitPos // 8
 	local offset = bitPos % 8
 
 	local result = 0
@@ -91,7 +104,7 @@ function BitBuffer:readBits(bits: number): number
 	local remaining = bits
 
 	while remaining > 0 do
-		local byte = buffer.readu8(self.buffer, index)
+		local byte = BufferUtil.read(self.buffer, "u8", index)
 
 		local readBits = math.min(8 - offset, remaining)
 		local chunk = bit32.extract(byte, offset, readBits)
@@ -147,38 +160,61 @@ function BitBuffer:readInt(): number
 end
 
 function BitBuffer:writeFloat(n: number)
-	local packed = string.pack("d", n)
-	for i = 1, 8 do
-		self:writeBits(packed:byte(i), 8)
-	end
+	self:alignToByte()
+
+	local index = self.writePos // 8
+	self:_ensure(index + 8)
+
+	BufferUtil.write(self.buffer, "f64", index, n)
+	self.writePos += 64
 end
 
 function BitBuffer:readFloat(): number
-	local bytes = table.create(8)
-	for i = 1, 8 do
-		bytes[i] = self:readBits(8)
-	end
-	return string.unpack("d", string.char(table.unpack(bytes)))
+	self:alignReadToByte()
+	assert(self.readPos % 8 == 0, "Unaligned float read")
+
+	local index = self.readPos // 8
+	self.readPos += 64
+
+	return BufferUtil.read(self.buffer, "f64", index)
 end
 
 function BitBuffer:writeStringRaw(str: string)
-	self:writeVarInt(#str)
-	for i = 1, #str do
-		self:writeBits(str:byte(i), 8)
+	self:alignToByte()
+
+	local len = #str
+	self:writeVarInt(len)
+
+	local index = self.writePos // 8
+	self:_ensure(index + len)
+
+	for i = 1, len do
+		BufferUtil.write(self.buffer, "u8", index + i - 1, str:byte(i))
 	end
+
+	self.writePos += len * 8
 end
 
 function BitBuffer:readStringRaw(): string
+	self:alignReadToByte()
 	local len = self:readVarInt()
+
+	assert(self.readPos % 8 == 0, "Unaligned string read")
+	local index = self.readPos // 8
+
 	local chars = table.create(len)
+
 	for i = 1, len do
-		chars[i] = string.char(self:readBits(8))
+		chars[i] = string.char(BufferUtil.read(self.buffer, "u8", index + i - 1))
 	end
+
+	self.readPos += len * 8
 	return table.concat(chars)
 end
 
 local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_TABLE = 0,1,2,3,4,5
-function isArray(tbl)
+
+local function isArray(tbl)
 	local n = #tbl
 	for k in pairs(tbl) do
 		if type(k) ~= "number" or k < 1 or k > n then
@@ -313,7 +349,7 @@ end
 function BitBuffer:setBuffer(buff: buffer, bitLength: number?)
 	self.buffer = buff
 	self.readPos = 0
-	self.writePos = bitLength or (BufferUtil.len(buff)*8)
+	self.writePos = bitLength or (BufferUtil.len(buff) * 8)
 end
 
 function BitBuffer:getByteLength(): number
