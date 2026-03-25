@@ -212,9 +212,8 @@ function BitBuffer:readStringRaw(): string
 	return table.concat(chars)
 end
 
-local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_TABLE = 0,1,2,3,4,5
-
-local function isArray(tbl)
+local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3 = 0,1,2,3,4,5,6
+function isArray(tbl)
 	local n = #tbl
 	for k in pairs(tbl) do
 		if type(k) ~= "number" or k < 1 or k > n then
@@ -251,7 +250,12 @@ function BitBuffer:writeValue(value, seen)
 	elseif t == "table" then
 		self:writeBits(TYPE_TABLE, 3)
 		self:writeTable(value, seen)
-
+	elseif t == 'Vector3' then
+		self:writeBits(TYPE_VECTOR3, 3)
+		local x, y, z = math.floor(value.X * 100 + 0.001), math.floor(value.Y * 100 + 0.001), math.floor(value.Z * 100 + 0.001)
+		self:writeInt(x)
+		self:writeInt(y)
+		self:writeInt(z)
 	else
 		error("Unsupported type: " .. t)
 	end
@@ -272,6 +276,9 @@ function BitBuffer:readValue()
 		return self:readStringRaw()
 	elseif typeTag == TYPE_TABLE then
 		return self:readTable()
+	elseif typeTag == TYPE_VECTOR3 then
+		local x, y, z = self:readInt(), self:readInt(), self:readInt()
+		return Vector3.new(x/100, y/100, z/100)
 	else
 		error("Unknown type")
 	end
