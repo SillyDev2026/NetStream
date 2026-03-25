@@ -72,75 +72,84 @@ local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 ### Server-Side: Example prints 5 b for 5 bits on a boolean
 
 ```lua
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local EventBusModule = require(ReplicatedStorage:WaitForChild("NetworkHandler"):WaitForChild("EventBus"))
-local Bnum = require(ReplicatedStorage.Bnum)
+--[[
+Today ill show u how to use NetStream
+where it will help u with less packet overhead
+]]
 
-local GameEvent = ReplicatedStorage:WaitForChild("GameEvents")
-local EventBus = EventBusModule.new(GameEvent)
+local EventBus = require('@game/ReplicatedStorage/NetworkHandler/EventBus') -- the NetStream is automatically in here
+-- the module so u dont have todo this
+local Bnum = require('@game/ReplicatedStorage/Bnum') -- formats to BN
 
--- decodes data
-GameEvent.OnServerEvent:Connect(function(player, data, bitLength)
-	EventBus:decode(player, data, bitLength)
+local new = EventBus.Remote() -- dont worry it works
+
+-- connects the OnServer with decode as in able to read whats recieved or sent
+
+-- example to update data
+-- i will need to fix that but its 8 bits
+local stat = {}
+new:Connect(1, function(player, data)
+	-- as u see 1 was recieved from client
+	if not stat[player.UserId] then stat[player.UserId] = {Click = 0} end
+	stat[player.UserId].Click = Bnum.toStr(Bnum.add(stat[player.UserId].Click, data))
+	-- now time to send data back to client
+	-- as u see data was sent back to client
+	new:SetLatest(1, Bnum.format(stat[player.UserId].Click), player)
+	
+	print(`Server Packets: {new:formatBytes()}`)
+	
+	-- 5 bits on boolean 
+	-- 6 bits on number or called int since its below 2^31
+	-- 8 bits and goes on since its based on length of string
 end)
 
-local isFalse = false
-
--- able to handle the decode to send back to client
-EventBus:Connect(1, function(player, data)
-	isFalse = data
-	print(player.Name, "its true now:", isFalse)
-	EventBus:SetLatest(1, isFalse, player)
-	print(`Server Packet: {EventBus:formatBytes()}`)
-end)
+-- decodes the buffer that was sent from Client
+new:OnConnect()
 ```
 
 ### Client-Side: UI Updates
 
 ```lua
--- StarterPlayerScripts/ClickClient.lua
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local EventBusModule = require(ReplicatedStorage:WaitForChild("NetworkHandler"):WaitForChild("EventBus"))
+local EventBus = require('@game/ReplicatedStorage/NetworkHandler/EventBus')
+-- fully removed GamesEvents
 
+local Players = game:GetService('Players')
 local player = Players.LocalPlayer
-local GameEvent = ReplicatedStorage:WaitForChild("GameEvents")
-
---[[
-old way of sending data from client to server now its automatic
-
-self._net.EventHandler = function(player: Player, id: number, ...)
-	local signal = self._signals[id]
-	if signal then
-		signal:Fire(player, ...)
-	end
-end
-]]
-local EventBus = EventBusModule.new(GameEvent)
-
+local new = EventBus.Remote()
 local TextButton = script.Parent.TextButton
 
--- this part to be able to decode so :Connect -- works
-GameEvent.OnClientEvent:Connect(function(data, bitLength)
-	EventBus:decode(player, data, bitLength)
-end)
+-- there is ur tutorial on how to use NetStream
+-- will be implementing it into KnitLite
 
--- connects Client to Server send data back
-EventBus:Connect(1, function(_, total)
-	TextButton.Text = `this cant be true: {total}`
-
-	print(`Client Packets: {EventBus:formatBytes()}`)
-end)
+TextButton.Text = 'CanUpgrade: false'
 
 TextButton.MouseButton1Click:Connect(function()
-	-- sends arg with id to server
-	EventBus:Fire(1, true)
+	-- sends data to server
+	new:Fire(1, 1)
 	
-	-- _flush to push packet to server
-	EventBus._net:_flush(false)
-
+	-- flushes event so it sends properly
+	new._net:_flush(false) -- its client to server listener
 end)
+
+new:Connect(1, function(_, data) -- dont need to worry about the player arg
+	TextButton.Text = `CanUpgrade: {data}`
+	
+	-- this part is able to tell u about ur bits on packet
+	print(`Client Packet: {new:formatBytes()}`)
+end)
+
+-- able to get from u as in the player if its smth else it will track it automatically kinda
+new:OnConnect()
+=[[
+old way
+GameEvent.OnClientEvent:Connect(function(player, data, bits)
+   new:decode(player, data, bits)
+end)
+
+]]
+
+-- if u saw it was able to keep under packet bursting
+-- well there is the tutorial on how to use NetStream
 ```
 
 ### Server-Side: Movement Replication
