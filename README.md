@@ -156,23 +156,53 @@ end)
 ### Server-Side: Movement Replication
 
 ```lua
-bus:Connect(2, function(player: Player, x: number, y: number, z: number)
-    print(player.Name .. " moved to", x, y, z)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
-    for _, plr in pairs(Players:GetPlayers()) do
-        bus:SetLatest(2, {x, y, z}, plr)
-    end
+-- Create Unreliable EventBus
+local Unreliable = EventBus.Remote()
+
+-- Handle incoming events from clients
+Unreliable:Connect(2, function(_, pos)
+	print("sent position:", pos)
+end)
+
+-- Send latest updates to all players
+local tickCount = 0
+RunService.Heartbeat:Connect(function()
+	tickCount += 1
+	if tickCount % 6 == 0 then
+		for _, plr in ipairs(Players:GetPlayers()) do
+			Unreliable:SetLatest(2, math.random(0, 100), plr)
+		end
+	end
 end)
 ```
 
 ### Client-Side: Sending Movement
 
 ```lua
-local playerPos = Vector3.new(0, 0, 0)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
-game:GetService("RunService").RenderStepped:Connect(function()
-    playerPos += Vector3.new(0, 0, 0.1)
-    bus:MoveVec(playerPos)  -- Unreliable movement update to server
+local player = Players.LocalPlayer
+local root = player.Character:WaitForChild("HumanoidRootPart")
+
+-- Create the Reliable EventBus
+local Reliable = EventBus.Remote()
+
+-- This will automatically connect OnClientEvent internally
+Unreliable:Connect(2, function(_, pos)
+	print("moved to:", pos)
+end)
+
+-- Send local player position each frame
+RunService.RenderStepped:Connect(function()
+	local pos = root.Position
+	Unreliable:MoveVec(pos)
+	Unreliable._net:_flush(false) -- sends to server
 end)
 ```
 
