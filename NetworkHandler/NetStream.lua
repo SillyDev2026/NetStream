@@ -1,8 +1,6 @@
 --!native
 --!optimize 2
 
-local dataTypes = {'string', 'bool', 'float', 'int'}
-
 export type Ring<T> = {
 	data: { T },
 	head: number,
@@ -94,10 +92,12 @@ function NetStreamClass.new(remote: any): NetStream
 	return self
 end
 
-function NetStreamClass:move(x: number, y: number, z: number)
-	push(self.unreliable, {OP_MOVE, q(x), q(y), q(z)})
+function NetStreamClass:move(x, y, z)
+	local safeX = math.clamp(math.floor(x*SCALE+0.5) + OFFSET, 0, 65535)
+	local safeY = math.clamp(math.floor(y*SCALE+0.5) + OFFSET, 0, 65535)
+	local safeZ = math.clamp(math.floor(z*SCALE+0.5) + OFFSET, 0, 65535)
+	push(self.unreliable, {OP_MOVE, safeX, safeY, safeZ})
 end
-
 function NetStreamClass:moveVec(pos: Vector3)
 	self:move(pos.X, pos.Y, pos.Z)
 end
@@ -117,18 +117,7 @@ function NetStreamClass:event(id: number, ...: any)
 	local packet = {OP_EVENT, id}
 	local args = {...}
 	for i = 1, #args do
-		local v = args[i]
-		if typeof(v) == "Vector3" then
-			packet[#packet+1] = q(v.X)
-			packet[#packet+1] = q(v.Y)
-			packet[#packet+1] = q(v.Z)
-		elseif typeof(v) == "number" or typeof(v) == "boolean" then
-			packet[#packet+1] = v
-		elseif typeof(v) == "string" then
-			packet[#packet+1] = v
-		else
-			warn("Unsupported type for network event:", typeof(v))
-		end
+		packet[#packet+1] = args[i]
 	end
 	push(self.reliable, packet)
 end
@@ -136,25 +125,34 @@ end
 function NetStreamClass:_flush(isServer: boolean?)
 	local buff = Bitbuff.new(128)
 
-	while true do
-		local packet = pop(self.reliable)
-		if not packet then break end
-		buff:write(packet)
-		for i = 3, #packet do
-			packet[i] = nil
+	local function writePacket(packet)
+		for i = 1, #packet do
+			buff:writeValue(packet[i])
 		end
 	end
 
+	-- Reliable packets
+	while true do
+		local packet = pop(self.reliable)
+		if not packet then break end
+		writePacket(packet)
+	end
+
+	-- Unreliable packets
 	while true do
 		local packet = pop(self.unreliable)
 		if not packet then break end
-		buff:write(packet)
+		writePacket(packet)
 	end
 
+	-- Latest updates
 	for k, v in pairs(self.latest) do
-		buff:write({OP_LATEST, k, v})
+		buff:writeValue(OP_LATEST)
+		buff:writeValue(k)
+		buff:writeValue(v)
 	end
 	table.clear(self.latest)
+
 	local data = buff:getBuffer()
 	local bitLength = buff.writePos
 	self._lastBuffer = buff
@@ -193,33 +191,38 @@ function NetStreamClass:decode(player: any, data: buffer, bitLength: number)
 	local state: PlayerState = PlayerStates[player]
 
 	while buff.readPos < bitLength do
-		local packet = buff:read()
-		if not packet then break end
-
-		local op = packet[1]
+		local op = buff:readValue()
 
 		if op == OP_MOVE then
-			local x = packet[2] - OFFSET
-			local y = packet[3] - OFFSET
-			local z = packet[4] - OFFSET
+			local x = buff:readValue() - OFFSET
+			local y = buff:readValue() - OFFSET
+			local z = buff:readValue() - OFFSET
 			state.Position = Vector3.new(x * INV_SCALE, y * INV_SCALE, z * INV_SCALE)
-
 		elseif op == OP_STATE then
-			state[packet[2]] = packet[3]
+			local id = buff:readValue()
+			local val = buff:readValue()
+			state[id] = val
 
 		elseif op == OP_EVENT then
-			local id = packet[2]
+			local id = buff:readValue()
+			local count = buff:readValue()
+			local args = table.create(count)
+			for i = 1, count do
+				args[i] = buff:readValue()
+			end
 			if self.EventHandler then
-				self.EventHandler(player, id, table.unpack(packet, 3))
+				self.EventHandler(player, id, table.unpack(args))
 			end
 
 		elseif op == OP_LATEST then
-			local id = packet[2]
-			local val = packet[3]
+			local id = buff:readValue()
+			local val = buff:readValue()
 			state[id] = val
 			if self.EventHandler then
 				self.EventHandler(nil, id, val)
 			end
+		else
+			error("Unknown packet type: "..tostring(op))
 		end
 	end
 end
