@@ -140,7 +140,7 @@ end)
 
 -- able to get from u as in the player if its smth else it will track it automatically kinda
 new:OnConnect()
-=[[
+--[[
 old way
 GameEvent.OnClientEvent:Connect(function(player, data, bits)
    new:decode(player, data, bits)
