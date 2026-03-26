@@ -114,8 +114,8 @@ function NetStreamClass:setLatest(id: number, value: number)
 end
 
 function NetStreamClass:event(id: number, ...: any)
-	local packet = {OP_EVENT, id}
 	local args = {...}
+	local packet = {OP_EVENT, id, #args}
 	for i = 1, #args do
 		packet[#packet+1] = args[i]
 	end
