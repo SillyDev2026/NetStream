@@ -7,11 +7,9 @@
 A **high-performance networking framework** for Roblox games, designed for **reliable and unreliable messaging**, **player state synchronization**, and a **flexible event bus system**. This module reduces bandwidth usage, ensures low-latency updates, and provides developers with a robust foundation for **real-time multiplayer games**.
 if u send smth like 200 events per Fire ur recv will go to 400kb/s but sent stays at 2kb/s so dont worry but dont do that
 do it as 
-```lua
-for i = 1, 200 do
-   new:Fire(1, 1)
-end -- now u dont need to worry since now it runs as 10 Flushes since now queue overflow
-```
+
+now batches properly
+so dont worry
 run it as new:Fire(1, 1) as example the for loop will cause packet bursting but still it will make sure that packet doenst reach over the required amount
 
 ---
