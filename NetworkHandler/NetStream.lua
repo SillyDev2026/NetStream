@@ -48,6 +48,7 @@ local OP_LATEST = 4
 local SCALE = 100
 local INV_SCALE = 1 / SCALE
 local OFFSET = 32768
+local MAXFLUSH = 10
 
 local PlayerStates: { [any]: PlayerState } = {}
 
@@ -98,6 +99,7 @@ function NetStreamClass:move(x, y, z)
 	local safeZ = math.clamp(math.floor(z*SCALE+0.5) + OFFSET, 0, 65535)
 	push(self.unreliable, {OP_MOVE, safeX, safeY, safeZ})
 end
+
 function NetStreamClass:moveVec(pos: Vector3)
 	self:move(pos.X, pos.Y, pos.Z)
 end
@@ -166,12 +168,12 @@ function NetStreamClass:_flush(isServer: boolean?)
 	end
 end
 
-function NetStreamClass:start()
+function NetStreamClass:start(isServer: boolean?)
 	if self.running then return end
 	self.running = true
 	task.spawn(function()
 		while self.running do
-			self:_flush(true)
+			self:_flush(isServer)
 			local load = count(self.reliable) + count(self.unreliable)
 			task.wait(load > 200 and 0.02 or load > 50 and 0.04 or 0.08)
 		end
@@ -219,7 +221,7 @@ function NetStreamClass:decode(player: any, data: buffer, bitLength: number)
 			local val = buff:readValue()
 			state[id] = val
 			if self.EventHandler then
-				self.EventHandler(nil, id, val)
+				self.EventHandler(player, id, val)
 			end
 		else
 			error("Unknown packet type: "..tostring(op))
