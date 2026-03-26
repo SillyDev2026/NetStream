@@ -134,14 +134,14 @@ function NetStreamClass:_flush(isServer: boolean?)
 	end
 
 	-- Reliable packets
-	while true do
+	for i = 1, MAXFLUSH do
 		local packet = pop(self.reliable)
 		if not packet then break end
 		writePacket(packet)
 	end
 
 	-- Unreliable packets
-	while true do
+	for i = 1, MAXFLUSH do
 		local packet = pop(self.unreliable)
 		if not packet then break end
 		writePacket(packet)
