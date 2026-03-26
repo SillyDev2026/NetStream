@@ -4,11 +4,10 @@
 local NetStream = require(script.Parent.NetStream)
 local Signal = require(script.Parent.Modules.Signal)
 local Reliable = script.Parent.Remotes.Reliable
-local Unreliable = script.Parent.Remotes.Unreliable
 local Players = game:GetService("Players")
 local RunService = game:GetService('RunService')
 
-function getEvent(name: string, unreliable: boolean)
+function getEvent(name: string)
 	local isServer = RunService:IsServer()
 
 	local remoteFolder = script.Parent:FindFirstChild("Remotes")
@@ -26,7 +25,7 @@ function getEvent(name: string, unreliable: boolean)
 	local remote = remoteFolder:FindFirstChild(name)
 	if not remote then
 		if isServer then
-			remote = Instance.new(unreliable and "UnreliableRemoteEvent" or "RemoteEvent")
+			remote = Instance.new('RemoteEvent')
 			remote.Name = name
 			remote.Parent = remoteFolder
 		else
@@ -40,10 +39,6 @@ function getReliable()
 	return getEvent('Reliable', false)
 end
 
-function getUnreliable()
-	return getEvent('Unreliable', true)
-end
-
 type EventCallback = (player: Player?, ...any) -> ()
 
 local EventBus = {}
@@ -51,7 +46,7 @@ EventBus.__index = EventBus
 
 type SignalMap = { [number]: Signal.Signal<any> }
 
-function EventBus.new(remote: RemoteEvent | UnreliableRemoteEvent)
+function EventBus.new(remote: RemoteEvent | UnreliableRemoteEvent, isServer: boolean?)
 	assert(remote, "RemoteEvent or RemoteFunction required")
 
 	local self = setmetatable({
@@ -59,7 +54,7 @@ function EventBus.new(remote: RemoteEvent | UnreliableRemoteEvent)
 		_signals = {} :: SignalMap,
 	}, EventBus)
 	
-	self._net:start()
+	self._net:start(isServer)
 	
 	self._net.EventHandler = function(player: Player, id: number, ...)
 		local signal = self._signals[id]
@@ -67,16 +62,13 @@ function EventBus.new(remote: RemoteEvent | UnreliableRemoteEvent)
 			signal:Fire(player, ...)
 		end
 	end
+	self:OnConnect()
 
 	return self
 end
 
-function EventBus.Remote()
-	return EventBus.new(getReliable())
-end
-
-function EventBus.Unreliable()
-	return EventBus.new(getUnreliable())
+function EventBus.Remote(isServer: boolean)
+	return EventBus.new(getReliable(), isServer)
 end
 
 -- Subscribe
@@ -86,7 +78,6 @@ function EventBus:Connect(eventId: number, callback: EventCallback)
 		sig = Signal.new()
 		self._signals[eventId] = sig
 	end
-	self:OnConnect()
 	return sig:Connect(callback)
 end
 
@@ -164,12 +155,12 @@ end
 function EventBus:OnConnect()
 	local remote = self._net.remote
 	if RunService:IsServer() then
-		return remote.OnServerEvent:Connect(function(player: Player, data: buffer, bits: number)
+		remote.OnServerEvent:Connect(function(player: Player, data: buffer, bits: number)
 			self:decode(player, data, bits)
 		end)
 	else
 		local player = Players.LocalPlayer
-		return remote.OnClientEvent:Connect(function(data, bits)
+		remote.OnClientEvent:Connect(function(data, bits)
 			self:decode(player, data, bits)
 		end)
 	end
