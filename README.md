@@ -10,7 +10,7 @@ do it as
 ```lua
 for i = 1, 200 do
    new:Fire(1, 1)
-end -- dont do this this will cause packet bursts
+end -- now u dont need to worry since now it runs as 10 Flushes since now queue overflow
 ```
 run it as new:Fire(1, 1) as example the for loop will cause packet bursting
 
