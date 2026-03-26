@@ -80,85 +80,83 @@ local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 ### Server-Side: Example prints 5 b for 5 bits on a boolean
 
 ```lua
---[[
-Today ill show u how to use NetStream
-where it will help u with less packet overhead
-]]
+local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
-local EventBus = require('@game/ReplicatedStorage/NetworkHandler/EventBus') -- the NetStream is automatically in here
--- the module so u dont have todo this
-local Bnum = require('@game/ReplicatedStorage/Bnum') -- formats to BN
+local RemoteEvent = game.ReplicatedStorage.RemoteEvent
 
-local new = EventBus.Remote(true) -- dont worry it works
+local new = EventBus.Remote(true)
+local net = {}
+local non = {}
 
--- connects the OnServer with decode as in able to read whats recieved or sent
+-- once u hit the text button again the whole system stops as u click again and still run again like normal meanwhile RemoteEvent by itself keeps running 
+new:Connect(1, function(plr, data)
+	if not net[plr.UserId] then
+		net[plr.UserId] = {Clicks = 0}
+	end
 
--- example to update data
--- i will need to fix that but its 8 bits
-local stat = {}
-new:Connect(1, function(player, data)
-	-- as u see 1 was recieved from client
-	if not stat[player.UserId] then stat[player.UserId] = {Click = 0} end
-	stat[player.UserId].Click = Bnum.toStr(Bnum.add(stat[player.UserId].Click, data))
-	-- now time to send data back to client
-	-- as u see data was sent back to client
-	new:SetLatest(1, Bnum.format(stat[player.UserId].Click), player)
-	
-	print(`Server Packets: {new:formatBytes()}`)
-	
-	-- 5 bits on boolean 
-	-- 6 bits on number or called int since its below 2^31
-	-- 8 bits and goes on since its based on length of string
+	net[plr.UserId].Clicks += data
+
+	new:Fire(1, net[plr.UserId].Clicks)
 end)
 
--- decodes the buffer that was sent from Client
---new:OnConnect()
+-- after u test it out the RemoteEvent keeps batching events if u let it run for 10 seconds ur wait time to let it all settle down is 30 seconds or more depening on what u send from client as the example i have for client
+function printEvent(plr, data)
+	if not non[plr.UserId] then
+		non[plr.UserId] = {Clicks = 0}
+	end
+	non[plr.UserId].Clicks += data
+	RemoteEvent:FireClient(plr, non[plr.UserId].Clicks)
+end
+
+RemoteEvent.OnServerEvent:Connect(printEvent)
 ```
 
 ### Client-Side: UI Updates
 
 ```lua
-local EventBus = require('@game/ReplicatedStorage/NetworkHandler/EventBus')
--- fully removed GamesEvents
+local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
-local Players = game:GetService('Players')
-local player = Players.LocalPlayer
+local RemoteEvent = game.ReplicatedStorage.RemoteEvent
+local RunService = game:GetService('RunService')
+
+local RS = game:GetService("RunService")
+
 local new = EventBus.Remote(false)
-local TextButton = script.Parent.TextButton
 
--- there is ur tutorial on how to use NetStream
--- will be implementing it into KnitLite
+local Remote = false
+local NetRemote = false
 
-TextButton.Text = 'CanUpgrade: false'
-
-TextButton.MouseButton1Click:Connect(function()
-	-- sends data to server
-	new:Fire(1, 1)
-	
-	-- flushes event so it sends properly
-	--new._net:_flush(false) let .Remote() handle the flushing no need for this anymore
+script.Parent.NonNetService.MouseButton1Click:Connect(function()
+	Remote = not Remote
 end)
 
-new:Connect(1, function(_, data) -- dont need to worry about the player arg
-	TextButton.Text = `CanUpgrade: {data}`
-	
-	-- this part is able to tell u about ur bits on packet
-	print(`Client Packet: {new:formatBytes()}`)
-end) -- Connect automatically can decode for u
-
--- able to get from u as in the player if its smth else it will track it automatically kinda
--- old way
---new:OnConnect()
---[[
-old way
-GameEvent.OnClientEvent:Connect(function(player, data, bits)
-   new:decode(player, data, bits)
+script.Parent.NetService.MouseButton1Click:Connect(function()
+	NetRemote = not NetRemote
 end)
 
-]]
+-- renders fully at its peak of 12kb/s to 14kb/s on network befor fully revamp was 300kb/s since batching was based on queue and _flush() to create the bits now its steady
+new:Connect(1, function(player, data)
+	script.Parent.NetService.Text = 'Clicks: ' .. data
+end)
 
--- if u saw it was able to keep under packet bursting
--- well there is the tutorial on how to use NetStream
+-- this runs at 18kb/s to 21kb/s 
+RemoteEvent.OnClientEvent:Connect(function(data)
+	script.Parent.NonNetService.Text = 'Clicks: ' .. data
+end)
+
+RunService.RenderStepped:Connect(function()
+	task.wait(0.01)
+	if Remote then
+		for i = 1, 100 do
+			RemoteEvent:FireServer(1)
+		end
+	end
+	if NetRemote then
+		for i = 1, 100 do
+			new:Fire(1, 1)
+		end
+	end
+end)
 ```
 
 ### Server-Side: Movement Replication
