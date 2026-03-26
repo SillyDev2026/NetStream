@@ -12,7 +12,7 @@ for i = 1, 200 do
    new:Fire(1, 1)
 end -- now u dont need to worry since now it runs as 10 Flushes since now queue overflow
 ```
-run it as new:Fire(1, 1) as example the for loop will cause packet bursting
+run it as new:Fire(1, 1) as example the for loop will cause packet bursting but still it will make sure that packet doenst reach over the required amount
 
 ---
 
