@@ -212,32 +212,71 @@ end)
 
 ### NetStream
 
-| Method                            | Description                                                  |
-| --------------------------------- | ------------------------------------------------------------ |
-| `new(remote)`                     | Creates a new NetStream for a RemoteEvent or RemoteFunction. |
-| `start()`                         | Begins automatic flushing of queued messages.                |
-| `stop()`                          | Stops the NetStream.                                         |
-| `move(x, y, z)`                   | Sends a movement update (unreliable).                        |
-| `moveVec(Vector3)`                | Sends a movement update using a Vector3.                     |
-| `stateUpdate(id, value)`          | Updates a state value (unreliable).                          |
-| `event(eventId, ...)`             | Fires a custom event (reliable).                             |
-| `setLatest(id, value)`            | Sends the latest value to clients.                           |
-| `decode(player, data, bitLength)` | Decodes incoming bit-packed messages.                        |
-| `getPlayerState(player)`          | Returns stored PlayerState object.                           |
+| Method                            | Description                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------- |
+| `new(remote)`                     | Creates a new NetStream bound to a RemoteEvent.                                 |
+| `start()`                         | Starts the automatic flushing loop with adaptive send rate based on queue load. |
+| `stop()`                          | Stops the NetStream flushing loop.                                              |
+| `move(x, y, z)`                   | Queues a compressed movement update (unreliable, quantized).                    |
+| `moveVec(Vector3)`                | Same as `move`, but accepts a Vector3.                                          |
+| `stateUpdate(id, value)`          | Sends a state update only if the value has changed (unreliable delta).          |
+| `event(eventId, ...)`             | Sends a reliable event with arguments (includes argument count internally).     |
+| `setLatest(id, value)`            | Stores a value to be sent as a latest snapshot on next flush.                   |
+| `decode(player, data, bitLength)` | Decodes incoming bit-packed messages and updates state/events.                  |
+| `_flush(isServer?)`               | Immediately flushes queued packets (used internally, context-aware).            |
+| `getPlayerState(player)`          | Returns the cached PlayerState object for a player.                             |
+| `bitLen()`                        | Returns last processed packet size in bits.                                     |
+| `byteLen()`                       | Returns last processed packet size in bytes.                                    |
+| `byteFormat(bits)`                | Formats bit size into a human-readable string.                                  |
+
+---
 
 ### EventBus
 
-| Method                                     | Description                                                                             |
-| ------------------------------------------ | --------------------------------------------------------------------------------------- |
-| `Connect(eventId, callback)`               | Subscribes to an event. Callback receives `(player, ...)` on server or `(…)` on client. |
-| `Once(eventId, callback)`                  | Subscribes once to an event.                                                            |
-| `Fire(eventId, ...)`                       | Fires an event from client → server.                                                    |
-| `SetLatest(eventId, value, targetPlayer?)` | Sends the latest value from server → client.                                            |
-| `StateUpdate(id, value)`                   | Updates a player state value.                                                           |
-| `Move(x, y, z)`                            | Sends a movement update (unreliable).                                                   |
-| `MoveVec(pos)`                             | Sends a Vector3 movement update (unreliable).                                           |
-| `Stop()`                                   | Stops all updates and disconnects signals.                                              |
-| `decode(player, data, bitLength)`          | Decodes incoming bit-packed data.                                                       |
+| Method                                     | Description                                                   |
+| ------------------------------------------ | ------------------------------------------------------------- |
+| `Remote()`                                 | Creates an EventBus using the default "Reliable" RemoteEvent. |
+| `Connect(eventId, callback)`               | Subscribes to an event. Callback receives `(player, ...)`.    |
+| `Once(eventId, callback)`                  | Subscribes to an event once.                                  |
+| `Fire(eventId, ...)`                       | Sends a reliable event through NetStream (client ↔ server).   |
+| `SetLatest(eventId, value, targetPlayer?)` | Sends an immediate latest value from server to client.        |
+| `StateUpdate(id, value)`                   | Sends a state update through NetStream.                       |
+| `Move(x, y, z)`                            | Sends a movement update (unreliable).                         |
+| `MoveVec(pos)`                             | Sends a Vector3 movement update (unreliable).                 |
+| `Stop()`                                   | Stops NetStream and disconnects all signals.                  |
+| `decode(player, data, bitLength)`          | Decodes incoming bit-packed data.                             |
+| `len()`                                    | Returns last packet size in bytes.                            |
+| `formatBytes()`                            | Returns formatted packet size string.                         |
+
+---
+
+### Notes
+
+* Reliable events (`event`) are batched and guaranteed to arrive.
+* Unreliable updates (`move`, `stateUpdate`) are faster and may drop.
+* Movement data is quantized for compression.
+* `setLatest` values are always sent on the next flush and overwrite previous values.
+* Flush direction is determined automatically (client → server or server → client).
+* `SetLatest` forces an immediate flush and should be used sparingly.
+* Event callbacks always receive `(player, ...)`, where:
+
+  * Server: player = sender
+  * Client: player = LocalPlayer
+  * Latest updates: player = nil
+
+---
+
+### PlayerState
+
+```
+type PlayerState = {
+    Position: Vector3?,
+    [number]: number,
+}
+```
+
+* `Position` is updated via movement packets.
+* Numeric keys are updated via `stateUpdate` and `setLatest`.
 
 ---
 
@@ -262,12 +301,7 @@ end)
 ## Download here
 u will be able to access the full module without manually copy and paste and yes i did zip the module there is 0 worry about backdoors since im a dev who wants to push newer features out that are fun to use and ez without doing much overhead any suggestions join my Discord
 
-updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26251882/NetworkHandler.zip)
-
-
-
-
-
+updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26257241/NetworkHandler.zip)
 
 
 This module offers a robust, performant foundation for building scalable, event-driven multiplayer experiences on Roblox.
