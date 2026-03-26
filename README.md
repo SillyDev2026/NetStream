@@ -81,7 +81,7 @@ local EventBus = require('@game/ReplicatedStorage/NetworkHandler/EventBus') -- t
 -- the module so u dont have todo this
 local Bnum = require('@game/ReplicatedStorage/Bnum') -- formats to BN
 
-local new = EventBus.Remote() -- dont worry it works
+local new = EventBus.Remote(true) -- dont worry it works
 
 -- connects the OnServer with decode as in able to read whats recieved or sent
 
@@ -115,7 +115,7 @@ local EventBus = require('@game/ReplicatedStorage/NetworkHandler/EventBus')
 
 local Players = game:GetService('Players')
 local player = Players.LocalPlayer
-local new = EventBus.Remote()
+local new = EventBus.Remote(false)
 local TextButton = script.Parent.TextButton
 
 -- there is ur tutorial on how to use NetStream
@@ -215,7 +215,7 @@ end)
 | Method                            | Description                                                                     |
 | --------------------------------- | ------------------------------------------------------------------------------- |
 | `new(remote)`                     | Creates a new NetStream bound to a RemoteEvent.                                 |
-| `start()`                         | Starts the automatic flushing loop with adaptive send rate based on queue load. |
+| `start(isServer)`                 | Starts the automatic flushing loop with adaptive send rate based on queue load. |
 | `stop()`                          | Stops the NetStream flushing loop.                                              |
 | `move(x, y, z)`                   | Queues a compressed movement update (unreliable, quantized).                    |
 | `moveVec(Vector3)`                | Same as `move`, but accepts a Vector3.                                          |
@@ -235,7 +235,7 @@ end)
 
 | Method                                     | Description                                                   |
 | ------------------------------------------ | ------------------------------------------------------------- |
-| `Remote()`                                 | Creates an EventBus using the default "Reliable" RemoteEvent. |
+| `Remote(isServer)`                         | Creates an EventBus using the default "Reliable" RemoteEvent. |
 | `Connect(eventId, callback)`               | Subscribes to an event. Callback receives `(player, ...)`.    |
 | `Once(eventId, callback)`                  | Subscribes to an event once.                                  |
 | `Fire(eventId, ...)`                       | Sends a reliable event through NetStream (client ↔ server).   |
