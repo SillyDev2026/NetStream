@@ -191,18 +191,18 @@ local player = Players.LocalPlayer
 local root = player.Character:WaitForChild("HumanoidRootPart")
 
 -- Create the Reliable EventBus
-local Reliable = EventBus.Remote()
+local Reliable = EventBus.Remote(false)
 
 -- This will automatically connect OnClientEvent internally
-Unreliable:Connect(2, function(_, pos)
+Reliable:Connect(2, function(_, pos)
 	print("moved to:", pos)
 end)
 
 -- Send local player position each frame
 RunService.RenderStepped:Connect(function()
 	local pos = root.Position
-	Unreliable:MoveVec(pos)
-	Unreliable._net:_flush(false) -- sends to server
+	Reliable:MoveVec(pos)
+	Reliable._net:_flush(false) -- sends to server
 end)
 ```
 
