@@ -128,7 +128,7 @@ TextButton.MouseButton1Click:Connect(function()
 	new:Fire(1, 1)
 	
 	-- flushes event so it sends properly
-	new._net:_flush(false) -- its client to server listener
+	--new._net:_flush(false) let .Remote() handle the flushing no need for this anymore
 end)
 
 new:Connect(1, function(_, data) -- dont need to worry about the player arg
