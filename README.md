@@ -13,6 +13,7 @@ for i = 1, 200 do
 end -- dont do this this will cause packet bursts
 ```
 run it as new:Fire(1, 1) as example the for loop will cause packet bursting
+
 ---
 
 ## Features
