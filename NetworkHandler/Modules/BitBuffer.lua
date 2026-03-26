@@ -1,32 +1,105 @@
 --!native
 --!optimize 2
 
+-- Node-like internal state is not exposed externally, but helps describe linked behavior
+
+export type BitBuffer = {
+	-- Core positions
+	writePos: number,
+	readPos: number,
+
+	-- Internal buffer
+	buffer: buffer,
+
+	-- Byte alignment
+	alignToByte: (self: BitBuffer) -> (),
+	alignReadToByte: (self: BitBuffer) -> (),
+
+	-- Bit operations
+	writeBits: (self: BitBuffer, value: number, bits: number) -> (),
+	readBits: (self: BitBuffer, bits: number) -> number,
+
+	-- Primitive types
+	writeBool: (self: BitBuffer, b: boolean) -> (),
+	readBool: (self: BitBuffer) -> boolean,
+
+	writeVarInt: (self: BitBuffer, n: number) -> (),
+	readVarInt: (self: BitBuffer) -> number,
+
+	writeInt: (self: BitBuffer, n: number) -> (),
+	readInt: (self: BitBuffer) -> number,
+
+	writeFloat: (self: BitBuffer, n: number) -> (),
+	readFloat: (self: BitBuffer) -> number,
+
+	writeString: (self: BitBuffer, str: string) -> (),
+	readString: (self: BitBuffer) -> string,
+
+	writeVector3: (self: BitBuffer, v: Vector3) -> (),
+	readVector3: (self: BitBuffer) -> Vector3,
+
+	-- Generic value serialization
+	writeValue: (self: BitBuffer, value: any, seen: {[any]: boolean}?) -> (),
+	readValue: (self: BitBuffer) -> any,
+
+	-- Table serialization
+	writeTable: (self: BitBuffer, tbl: {[any]: any}, seen: {[any]: boolean}) -> (),
+	readTable: (self: BitBuffer) -> {[any]: any},
+
+	-- Multi-value helpers
+	write: (self: BitBuffer, ...any) -> (),
+	read: (self: BitBuffer) -> any,
+
+	-- Buffer access
+	getBuffer: (self: BitBuffer) -> buffer,
+	setBuffer: (self: BitBuffer, buff: buffer, bitLength: number?) -> (),
+
+	-- Utility
+	getByteLength: (self: BitBuffer) -> number,
+	reset: (self: BitBuffer) -> (),
+}
+
+type BitBufferInternal = {
+	buffer: buffer,
+	writePos: number,
+	readPos: number,
+}
+
 local BufferUtil = require(script.Parent.BufferUtil)
 
 local BitBuffer = {}
 BitBuffer.__index = BitBuffer
 
---// CONSTANTS
+--[[Constants used for encoding and type tagging.]]
 local MAX_VARINT_BITS = 35
 
 local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3 =
 	0,1,2,3,4,5,6
 
---// ZIGZAG
+--[[Encodes a signed integer using zigzag encoding.
+@param n number
+@return number]]
 function zigzagEncode(n: number): number
 	return bit32.bxor(bit32.lshift(n, 1), bit32.rshift(n, 31))
 end
 
+--[[Decodes a zigzag-encoded integer.
+@param n number
+@return number]]
 function zigzagDecode(n: number): number
 	return bit32.bxor(bit32.rshift(n, 1), -bit32.band(n, 1))
 end
 
---// SAFE MASK
+--[[Creates a bitmask for a given number of bits.
+@param bits number
+@return number]]
 function mask(bits: number): number
 	return (bits == 32) and 0xFFFFFFFF or (bit32.lshift(1, bits) - 1)
 end
 
---// ARRAY CHECK (STRICT)
+--[[Checks whether a table is an array (sequential numeric keys starting at 1).
+@param tbl table
+@return boolean]]
 function isArray(tbl)
 	local max, count = 0, 0
 	for k in pairs(tbl) do
@@ -39,16 +112,19 @@ function isArray(tbl)
 	return max == count
 end
 
---// CONSTRUCTOR
-function BitBuffer.new(size: number?)
+--[[Creates a new BitBuffer instance.
+@param size number? Initial buffer size in bytes
+@return BitBuffer]]
+function BitBuffer.new(size: number?): BitBuffer
 	local self = setmetatable({}, BitBuffer)
 	self.buffer = BufferUtil.new(size or 64)
 	self.writePos = 0
 	self.readPos = 0
-	return self
+	return self:: BitBuffer
 end
 
---// ENSURE CAPACITY (EXACT)
+--[[Ensures the buffer has enough capacity to store the given number of bits.
+@param bitCount number]]
 function BitBuffer:_ensureBits(bitCount: number)
 	local neededBytes = math.ceil(bitCount / 8)
 	local len = BufferUtil.len(self.buffer)
@@ -61,7 +137,7 @@ function BitBuffer:_ensureBits(bitCount: number)
 	end
 end
 
---// ALIGN (SAFE ZERO FILL)
+--[[Aligns the write position to the next byte boundary by padding with zeros.]]
 function BitBuffer:alignToByte()
 	local mod = self.writePos % 8
 	if mod ~= 0 then
@@ -69,6 +145,7 @@ function BitBuffer:alignToByte()
 	end
 end
 
+--[[Aligns the read position to the next byte boundary.]]
 function BitBuffer:alignReadToByte()
 	local mod = self.readPos % 8
 	if mod ~= 0 then
@@ -76,7 +153,9 @@ function BitBuffer:alignReadToByte()
 	end
 end
 
---// WRITE BITS (FAST PATHS)
+--[[Writes a value using the specified number of bits.
+@param value number
+@param bits number (1–32)]]
 function BitBuffer:writeBits(value: number, bits: number)
 	assert(bits > 0 and bits <= 32)
 
@@ -88,7 +167,6 @@ function BitBuffer:writeBits(value: number, bits: number)
 
 	value = bit32.band(value, mask(bits))
 
-	--// FAST PATHS
 	if aligned then
 		if bits == 8 then
 			BufferUtil.write(self.buffer, "u8", index, value)
@@ -105,7 +183,6 @@ function BitBuffer:writeBits(value: number, bits: number)
 		end
 	end
 
-	--// SLOW PATH (BIT PACK)
 	local offset = bitPos % 8
 	local remaining = bits
 	local shift = 0
@@ -130,7 +207,9 @@ function BitBuffer:writeBits(value: number, bits: number)
 	self.writePos = bitPos + bits
 end
 
---// READ BITS (SAFE)
+--[[Reads a value using the specified number of bits.
+@param bits number (1–32)
+@return number]]
 function BitBuffer:readBits(bits: number): number
 	assert(bits > 0 and bits <= 32)
 	assert(self.readPos + bits <= self.writePos, "Read overflow")
@@ -139,7 +218,6 @@ function BitBuffer:readBits(bits: number): number
 	local aligned = (bitPos % 8 == 0)
 	local index = bitPos // 8
 
-	--// FAST PATHS
 	if aligned then
 		if bits == 8 then
 			self.readPos += 8
@@ -153,7 +231,6 @@ function BitBuffer:readBits(bits: number): number
 		end
 	end
 
-	--// SLOW PATH
 	local offset = bitPos % 8
 	local result = 0
 	local shift = 0
@@ -177,16 +254,20 @@ function BitBuffer:readBits(bits: number): number
 	return result
 end
 
---// BASIC TYPES
+--[[Writes a boolean value as a single bit.
+@param b boolean]]
 function BitBuffer:writeBool(b: boolean)
 	self:writeBits(b and 1 or 0, 1)
 end
 
+--[[Reads a boolean value.
+@return boolean]]
 function BitBuffer:readBool(): boolean
 	return self:readBits(1) == 1
 end
 
---// VARINT (SAFE)
+--[[Writes a variable-length integer (VarInt).
+@param n number]]
 function BitBuffer:writeVarInt(n: number)
 	while n >= 0x80 do
 		self:writeBits(bit32.bor(bit32.band(n, 0x7F), 0x80), 8)
@@ -195,6 +276,8 @@ function BitBuffer:writeVarInt(n: number)
 	self:writeBits(n, 8)
 end
 
+--[[Reads a variable-length integer (VarInt).
+@return number]]
 function BitBuffer:readVarInt(): number
 	local shift = 0
 	local result = 0
@@ -213,16 +296,20 @@ function BitBuffer:readVarInt(): number
 	error("VarInt overflow")
 end
 
---// INT
+--[[Writes a signed integer using zigzag encoding.
+@param n number]]
 function BitBuffer:writeInt(n: number)
 	self:writeVarInt(zigzagEncode(n))
 end
 
+--[[Reads a signed integer encoded with zigzag.
+@return number]]
 function BitBuffer:readInt(): number
 	return zigzagDecode(self:readVarInt())
 end
 
---// FLOAT (F32 OPTIMIZED)
+--[[Writes a 32-bit float (byte-aligned).
+@param n number]]
 function BitBuffer:writeFloat(n: number)
 	self:alignToByte()
 	local index = self.writePos // 8
@@ -233,6 +320,8 @@ function BitBuffer:writeFloat(n: number)
 	self.writePos += 32
 end
 
+--[[Reads a 32-bit float (byte-aligned).
+@return number]]
 function BitBuffer:readFloat(): number
 	self:alignReadToByte()
 
@@ -242,13 +331,16 @@ function BitBuffer:readFloat(): number
 	return BufferUtil.read(self.buffer, "f32", index)
 end
 
---// VECTOR3 (PACKED)
+--[[Writes a Vector3 (scaled by 100).
+@param v Vector3]]
 function BitBuffer:writeVector3(v)
 	self:writeInt(math.floor(v.X * 100))
 	self:writeInt(math.floor(v.Y * 100))
 	self:writeInt(math.floor(v.Z * 100))
 end
 
+--[[Reads a Vector3 (scaled by 100).
+@return Vector3]]
 function BitBuffer:readVector3()
 	return Vector3.new(
 		self:readInt() / 100,
@@ -257,7 +349,8 @@ function BitBuffer:readVector3()
 	)
 end
 
---// STRING
+--[[Writes a string with a length prefix.
+@param str string]]
 function BitBuffer:writeString(str: string)
 	self:alignToByte()
 
@@ -274,6 +367,8 @@ function BitBuffer:writeString(str: string)
 	self.writePos += len * 8
 end
 
+--[[Reads a length-prefixed string.
+@return string]]
 function BitBuffer:readString(): string
 	self:alignReadToByte()
 
@@ -289,8 +384,10 @@ function BitBuffer:readString(): string
 	return table.concat(chars)
 end
 
---// VALUE (FAST TYPES)
-function BitBuffer:writeValue(value, seen)
+--[[Writes a dynamically typed value (nil, boolean, number, string, Vector3, table).
+@param value any
+@param seen table?]]
+function BitBuffer:writeValue(value: any, seen)
 	seen = seen or {}
 
 	if value == nil then
@@ -326,6 +423,8 @@ function BitBuffer:writeValue(value, seen)
 	end
 end
 
+--[[Reads a dynamically typed value.
+@return any]]
 function BitBuffer:readValue()
 	local typeTag = self:readBits(3)
 
@@ -348,7 +447,9 @@ function BitBuffer:readValue()
 	error("Unknown type")
 end
 
---// TABLE
+--[[Writes a table (array or dictionary).
+@param tbl table
+@param seen table]]
 function BitBuffer:writeTable(tbl, seen)
 	if seen[tbl] then error("Circular table") end
 	seen[tbl] = true
@@ -377,6 +478,8 @@ function BitBuffer:writeTable(tbl, seen)
 	seen[tbl] = nil
 end
 
+--[[Reads a serialized table.
+@return table]]
 function BitBuffer:readTable()
 	local arrayMode = self:readBool()
 
@@ -397,7 +500,8 @@ function BitBuffer:readTable()
 	end
 end
 
---// MULTI
+--[[Writes multiple values.
+@vararg any]]
 function BitBuffer:write(...)
 	local n = select("#", ...)
 	self:writeVarInt(n)
@@ -406,7 +510,9 @@ function BitBuffer:write(...)
 	end
 end
 
-function BitBuffer:read(): ...any
+--[[Reads multiple values.
+@return any...]]
+function BitBuffer:read(): any
 	local n = self:readVarInt()
 
 	if n == 1 then
@@ -421,23 +527,31 @@ function BitBuffer:read(): ...any
 	return table.unpack(t, 1, n)
 end
 
---// META
+--[[Returns the internal buffer.
+@return buffer]]
 function BitBuffer:getBuffer(): buffer
 	return self.buffer
 end
 
+--[[Returns the used byte length of the buffer.
+@return number]]
 function BitBuffer:getByteLength(): number
 	return math.ceil(self.writePos / 8)
 end
 
+--[[Replaces the buffer and resets read/write positions.
+@param buff buffer
+@param bitLength number?]]
 function BitBuffer:setBuffer(buff: buffer, bitLength: number?)
 	self.buffer = buff
 	self.readPos = 0
 	self.writePos = bitLength or (BufferUtil.len(buff) * 8)
 end
 
+--[[Resets the buffer read and write positions.]]
 function BitBuffer:reset()
 	self.readPos = 0
+	self.writePos = 0
 end
 
 return BitBuffer
