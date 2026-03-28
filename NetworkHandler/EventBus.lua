@@ -14,7 +14,7 @@ local EventBus = {}
 EventBus.__index = EventBus
 
 -- Remote setup
-function getEvent(name: string)
+local function getEvent(name: string)
 	local isServer = RunService:IsServer()
 
 	local remoteFolder = script.Parent:FindFirstChild("Remotes")
@@ -44,7 +44,7 @@ function getEvent(name: string)
 	return remote
 end
 
-function getReliable()
+local function getReliable()
 	return getEvent("Reliable")
 end
 
@@ -157,6 +157,13 @@ function EventBus:OnConnect()
 			self:decode(player, data, bits)
 		end)
 	end
+end
+
+function EventBus:FireToPlayer(player: Player, eventId: number, ...)
+	self._net.TargetPlayer = player
+	self._net:event(eventId, ...)
+	self._net:_flush(true)
+	self._net.TargetPlayer = nil
 end
 
 return EventBus
