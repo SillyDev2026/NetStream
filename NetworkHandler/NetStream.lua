@@ -1,7 +1,3 @@
--- NetStream.lua
---!native
---!optimize 2
-
 local Bitbuff = require(script.Parent.Modules.BitBuffer)
 
 local OP_MOVE, OP_STATE, OP_EVENT, OP_LATEST = 1,2,3,4
@@ -84,7 +80,7 @@ function NetStreamClass.new(remote): NetStream
 		running = false,
 		TargetPlayer = nil,
 		EventHandler = nil,
-		_buffer = Bitbuff.new(4096),
+		_write = Bitbuff.new(4096),
 	}, NetStreamClass)
 
 	return self
@@ -132,69 +128,89 @@ end
 
 -- Flush
 function NetStreamClass:_flush(isServer)
-	local buff: Bitbuff.BitBuffer = self._buffer
+	local buff: Bitbuff.BitBuffer = self._write
 	buff:reset()
 
-	local function writePacket(packet)
-		local op = packet[1]
+	local hasData = false
 
-		buff:writeBits(op, 3)
+	local pop = pop
+	local latest = self.latest
 
-		if op == OP_MOVE then
-			buff:writeVarInt(packet[2])
-			buff:writeVarInt(packet[3])
-			buff:writeVarInt(packet[4])
+	do
+		while true do
+			local packet = pop(self.reliable)
+			if not packet then break end
 
-		elseif op == OP_STATE then
-			buff:writeVarInt(packet[2])
-			buff:writeVarInt(packet[3])
+			hasData = true
 
-		elseif op == OP_EVENT then
-			local id = packet[2]
-			local count = packet[3]
+			local op = packet[1]
+			buff:writeBits(op, 3)
 
-			buff:writeVarInt(id)
-			buff:writeVarInt(count)
+			if op == OP_EVENT then
+				local id = packet[2]
+				local count = packet[3]
 
-			for i = 1, count do
-				buff:writeValue(packet[3+i])
+				buff:writeVarInt(id)
+				buff:writeVarInt(count)
+
+				for i = 1, count do
+					buff:writeValue(packet[3 + i])
+				end
 			end
-
 		end
 	end
 
-	while true do
-		local pkt = pop(self.reliable)
-		if not pkt then break end
-		writePacket(pkt)
+	do
+		while true do
+			local packet = pop(self.unreliable)
+			if not packet then break end
+
+			hasData = true
+
+			local op = packet[1]
+			buff:writeBits(op, 3)
+
+			if op == OP_MOVE then
+				buff:writeVarInt(packet[2])
+				buff:writeVarInt(packet[3])
+				buff:writeVarInt(packet[4])
+
+			elseif op == OP_STATE then
+				buff:writeVarInt(packet[2])
+				buff:writeVarInt(packet[3])
+			end
+		end
 	end
 
-	while true do
-		local pkt = pop(self.unreliable)
-		if not pkt then break end
-		writePacket(pkt)
+	if next(latest) then
+		hasData = true
+
+		for k, v in pairs(latest) do
+			buff:writeBits(OP_LATEST, 3)
+			buff:writeVarInt(k)
+			buff:writeVarInt(v)
+		end
+
+		table.clear(latest)
 	end
 
-	for k,v in pairs(self.latest) do
-		buff:writeBits(OP_LATEST, 3)
-		buff:writeVarInt(k)
-		buff:writeVarInt(v)
+	if not hasData then
+		return
 	end
-	table.clear(self.latest)
 
 	local data = buff:getBuffer()
 	local bits = buff.writePos
 
-	if bits > 0 then
-		if isServer then
-			if self.TargetPlayer then
-				self.remote:FireClient(self.TargetPlayer, data, bits)
-			else
-				self.remote:FireAllClients(data, bits)
-			end
+	if bits <= 0 then return end
+
+	if isServer then
+		if self.TargetPlayer then
+			self.remote:FireClient(self.TargetPlayer, data, bits)
 		else
-			self.remote:FireServer(data, bits)
+			self.remote:FireAllClients(data, bits)
 		end
+	else
+		self.remote:FireServer(data, bits)
 	end
 end
 
@@ -204,8 +220,10 @@ function NetStreamClass:start(isServer)
 
 	task.spawn(function()
 		while self.running do
-			self:_flush(isServer)
-			task.wait(0.05)
+			if count(self.reliable) > 0 or count(self.unreliable) > 0 or next(self.latest) then
+				self:_flush(isServer)
+			end
+			task.wait(0.01)
 		end
 	end)
 end
@@ -216,15 +234,24 @@ end
 
 -- Decode
 function NetStreamClass:decode(player, data, bitLength)
-	local buff: Bitbuff.BitBuffer = self._buffer
+	if not data or not bitLength then return end
+
+	local buff = Bitbuff.new()
 	buff:setBuffer(data, bitLength)
 
-	PlayerStates[player] = PlayerStates[player] or {}
 	local state = PlayerStates[player]
+	if not state then
+		state = {}
+		PlayerStates[player] = state
+	end
 
 	local args = {}
 
 	while buff.readPos < bitLength do
+		if bitLength - buff.readPos < 3 then
+			break
+		end
+
 		local op = buff:readBits(3)
 
 		if op == OP_MOVE then
@@ -232,7 +259,7 @@ function NetStreamClass:decode(player, data, bitLength)
 			local y = (buff:readVarInt() - OFFSET) * INV_SCALE
 			local z = (buff:readVarInt() - OFFSET) * INV_SCALE
 
-			state.Position = Vector3.new(x,y,z)
+			state.Position = Vector3.new(x, y, z)
 
 		elseif op == OP_STATE then
 			local id = buff:readVarInt()
@@ -243,12 +270,18 @@ function NetStreamClass:decode(player, data, bitLength)
 			local id = buff:readVarInt()
 			local count = buff:readVarInt()
 
+			if count > 256 then
+				break
+			end
+
+			local args = table.create(count)
+
 			for i = 1, count do
 				args[i] = buff:readValue()
 			end
 
 			if self.EventHandler then
-				self.EventHandler(player, id, table.unpack(args, 1, count))
+				self.EventHandler(player, id, table.unpack(args))
 			end
 
 		elseif op == OP_LATEST then
