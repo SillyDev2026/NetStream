@@ -162,7 +162,6 @@ end
 function EventBus:FireToPlayer(player: Player, eventId: number, ...)
 	self._net.TargetPlayer = player
 	self._net:event(eventId, ...)
-	self._net:_flush(true)
 	self._net.TargetPlayer = nil
 end
 
