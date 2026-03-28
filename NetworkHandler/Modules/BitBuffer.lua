@@ -73,8 +73,8 @@ BitBuffer.__index = BitBuffer
 --[[Constants used for encoding and type tagging.]]
 local MAX_VARINT_BITS = 35
 
-local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3 =
-	0,1,2,3,4,5,6
+local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_DOUBLE, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3 =
+	0,1,2,3,4,5,6,7
 
 --[[Encodes a signed integer using zigzag encoding.
 @param n number
@@ -331,6 +331,27 @@ function BitBuffer:readFloat(): number
 	return BufferUtil.read(self.buffer, "f32", index)
 end
 
+--[[writes a double which is IEEE-754]]
+function BitBuffer:writeDouble(n: number)
+	self:alignToByte()
+
+	local index = self.writePos // 8
+	self:_ensureBits(self.writePos + 64)
+
+	BufferUtil.write(self.buffer, "f64", index, n)
+	self.writePos += 64
+end
+
+--[[reads the double]]
+function BitBuffer:readDouble(): number
+	self:alignReadToByte()
+
+	local index = self.readPos // 8
+	self.readPos += 64
+
+	return BufferUtil.read(self.buffer, "f64", index)
+end
+
 --[[Writes a Vector3 (scaled by 100).
 @param v Vector3]]
 function BitBuffer:writeVector3(v)
@@ -398,12 +419,15 @@ function BitBuffer:writeValue(value: any, seen)
 		self:writeBool(value)
 
 	elseif type(value) == "number" then
-		if math.floor(value) == value then
+		if value ~= value or value == math.huge or value == -math.huge then
+			error('Invalid number')
+		end
+		if math.floor(value) ~= value or math.abs(value) > 2^30 then
+			self:writeBits(TYPE_DOUBLE, 3)
+			self:writeDouble(value)
+		else
 			self:writeBits(TYPE_INT, 3)
 			self:writeInt(value)
-		else
-			self:writeBits(TYPE_FLOAT, 3)
-			self:writeFloat(value)
 		end
 
 	elseif type(value) == "string" then
@@ -417,7 +441,6 @@ function BitBuffer:writeValue(value: any, seen)
 	elseif type(value) == "table" then
 		self:writeBits(TYPE_TABLE, 3)
 		self:writeTable(value, seen)
-
 	else
 		error("Unsupported type")
 	end
@@ -442,6 +465,8 @@ function BitBuffer:readValue()
 		return self:readVector3()
 	elseif typeTag == TYPE_TABLE then
 		return self:readTable()
+	elseif typeTag == TYPE_DOUBLE then
+		return self:readDouble()
 	end
 
 	error("Unknown type")
@@ -552,6 +577,7 @@ end
 function BitBuffer:reset()
 	self.readPos = 0
 	self.writePos = 0
+	BufferUtil.clear(self.buffer)
 end
 
 return BitBuffer
