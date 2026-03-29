@@ -67,15 +67,21 @@ type BitBufferInternal = {
 
 local BufferUtil = require(script.Parent.BufferUtil)
 
-local BitBuffer = {}
+local BitBuffer = {
+	SetBitsBasedOnLies = 8,
+}
 BitBuffer.__index = BitBuffer
 
 --[[Constants used for encoding and type tagging.]]
 local MAX_VARINT_BITS = 35
+local SetBitsBasedOnLies = BitBuffer.SetBitsBasedOnLies
 
-local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_DOUBLE, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3 =
-	0,1,2,3,4,5,6,7
+local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_DOUBLE, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3, TYPE_INSTANCE =
+	0,1,2,3,4,5,6,7,8
 
+function getInstance(inst: Instance): string
+	return inst:GetFullName()
+end
 --[[Encodes a signed integer using zigzag encoding.
 @param n number
 @return number]]
@@ -405,6 +411,25 @@ function BitBuffer:readString(): string
 	return table.concat(chars)
 end
 
+function BitBuffer:writeInstance(inst: Instance)
+	local path = getInstance(inst)
+	self:writeString(path)
+end
+
+function searchForInstance(path: string): Instance?
+	local curr = game
+	for segment in string.gmatch(path, '[^%.]+') do
+		curr = curr:FindFirstChild(segment)
+		if not curr then return nil end
+	end
+	return curr
+end
+
+function BitBuffer:readInstance(): Instance?
+	local path = self:readString()
+	return searchForInstance(path)
+end
+
 --[[Writes a dynamically typed value (nil, boolean, number, string, Vector3, table).
 @param value any
 @param seen table?]]
@@ -412,10 +437,10 @@ function BitBuffer:writeValue(value: any, seen)
 	seen = seen or {}
 
 	if value == nil then
-		self:writeBits(TYPE_NIL, 3)
+		self:writeBits(TYPE_NIL, SetBitsBasedOnLies)
 
 	elseif type(value) == "boolean" then
-		self:writeBits(TYPE_BOOL, 3)
+		self:writeBits(TYPE_BOOL, SetBitsBasedOnLies)
 		self:writeBool(value)
 
 	elseif type(value) == "number" then
@@ -423,24 +448,27 @@ function BitBuffer:writeValue(value: any, seen)
 			error('Invalid number')
 		end
 		if math.floor(value) ~= value or math.abs(value) > 2^30 then
-			self:writeBits(TYPE_DOUBLE, 3)
+			self:writeBits(TYPE_DOUBLE, SetBitsBasedOnLies)
 			self:writeDouble(value)
 		else
-			self:writeBits(TYPE_INT, 3)
+			self:writeBits(TYPE_INT, SetBitsBasedOnLies)
 			self:writeInt(value)
 		end
 
 	elseif type(value) == "string" then
-		self:writeBits(TYPE_STRING, 3)
+		self:writeBits(TYPE_STRING, SetBitsBasedOnLies)
 		self:writeString(value)
 
 	elseif typeof(value) == "Vector3" then
-		self:writeBits(TYPE_VECTOR3, 3)
+		self:writeBits(TYPE_VECTOR3, SetBitsBasedOnLies)
 		self:writeVector3(value)
 
 	elseif type(value) == "table" then
-		self:writeBits(TYPE_TABLE, 3)
+		self:writeBits(TYPE_TABLE, SetBitsBasedOnLies)
 		self:writeTable(value, seen)
+	elseif typeof(value) == 'Instance' then
+		self:writeBits(TYPE_INSTANCE, SetBitsBasedOnLies)
+		self:writeInstance(value)
 	else
 		error("Unsupported type")
 	end
@@ -449,7 +477,7 @@ end
 --[[Reads a dynamically typed value.
 @return any]]
 function BitBuffer:readValue()
-	local typeTag = self:readBits(3)
+	local typeTag = self:readBits(SetBitsBasedOnLies)
 
 	if typeTag == TYPE_NIL then
 		return nil
@@ -467,6 +495,8 @@ function BitBuffer:readValue()
 		return self:readTable()
 	elseif typeTag == TYPE_DOUBLE then
 		return self:readDouble()
+	elseif typeTag == TYPE_INSTANCE then
+		return self:readInstance()
 	end
 
 	error("Unknown type")
