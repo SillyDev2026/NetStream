@@ -209,7 +209,83 @@ RunService.RenderStepped:Connect(function()
 	Reliable._net:_flush(false) -- sends to server
 end)
 ```
+## Global Message Example
 
+```lua
+-- server
+local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
+local new = EventBus.Remote(true)
+-- dont need todo anything down here -- it auto does it for u
+```
+
+```lua
+-- client
+local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
+
+local new = EventBus.Remote(false)
+local TextChat = game:GetService("TextChatService")
+TextChat.ChatWindowConfiguration.TextSize = 16
+local Channel: TextChannel = TextChat:WaitForChild("TextChannels"):WaitForChild("RBXGeneral")
+
+new:Connect(1, function(_, tag, roleName, displayName, playerName, roleColor)
+
+	local tagColor = "#3B82F6"
+	local roleColor = roleColor or "#A0A0A0"
+	local nameColor = "#FFFFFF"
+	local playerColor = "#C7D1DB"
+
+	local message = string.format(
+		'<font color="%s">%s</font> <font color="%s">[%s]</font> <font color="%s">%s</font> <font color="%s">[%s]</font> has Joined the game',
+		tagColor,
+		tag,
+		roleColor,
+		roleName,
+		nameColor,
+		displayName,
+		playerColor,
+		playerName
+	)
+
+	Channel:DisplaySystemMessage(message)
+end)
+
+new:Connect(2, function(_, tag, displayName, actionText)
+	local message = string.format(
+		'<font color="#FF4C4C">%s</font> <font color="#FFFFFF">%s</font> <font color="#FF4C4C">%s</font>',
+		tag,
+		displayName,
+		actionText
+	)
+
+	Channel:DisplaySystemMessage(message)
+end)
+
+local TextChatService = game:GetService("TextChatService")
+
+TextChatService.OnIncomingMessage = function(message)
+	if message.TextSource then
+		local player = game.Players:GetPlayerByUserId(message.TextSource.UserId)
+		if not player then return end
+
+		local roleName = player:GetAttribute("RoleName") or "Member"
+		local roleColor = player:GetAttribute("RoleColor") or "#94A3B8"
+		local nameColor = "#C7D1DB"
+
+		local props = Instance.new("TextChatMessageProperties")
+
+		props.PrefixText = string.format(
+			'<font color="%s">[%s]</font> <font color="%s">%s</font>',
+			roleColor,
+			roleName,
+			nameColor,
+			player.DisplayName
+		)
+
+		return props
+	end
+
+	return nil
+end```
 ---
 
 ## API Reference
