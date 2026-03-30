@@ -3,6 +3,7 @@
 
 local NetStream = require(script.Parent.NetStream)
 local Signal = require(script.Parent.Modules.Signal)
+local RoleSystem = require(script.Parent.Modules.RoleSystem)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
@@ -55,6 +56,7 @@ function EventBus.new(remote: RemoteEvent, isServer: boolean?)
 		_streams = {},
 		_signals = {} :: SignalMap,
 	}, EventBus)
+	self:OnConnect()
 
 	return self
 end
@@ -105,6 +107,12 @@ function EventBus:Fire(eventId: number,  ...: any)
 	local player = Players.LocalPlayer
 	local stream = self._streams[player]
 	if stream then
+		stream:event(eventId, ...)
+	end
+end
+
+function EventBus:FireAll(eventId: number, ...: any)
+	for _, stream in pairs(self._streams) do
 		stream:event(eventId, ...)
 	end
 end
@@ -200,11 +208,28 @@ function EventBus:OnConnect()
 		for _, player in ipairs(Players:GetPlayers()) do
 			attach(player)
 		end
+		local function addRoleId(id: number, name: string, color: string)
+			RoleSystem.Roles[id] = {
+				Name = name,
+				Color = color
+			}
+			return RoleSystem.Roles
+		end
+		addRoleId(7262134641, 'Owner', '#F59E0B')
 
-		Players.PlayerAdded:Connect(attach)
+		Players.PlayerAdded:Connect(function(player)
+			attach(player)
+			local hex = "#3B82F6"
+			local role = RoleSystem.Roles[player.UserId] or RoleSystem.Default
+			player:SetAttribute('RoleName', role.Name)
+			player:SetAttribute('RoleColor', role.Color)
+			task.wait(3)
+			self:FireAll(1, '[Server]: ', role.Name, player.DisplayName, player.Name, role.Color)
+		end)
 
 		Players.PlayerRemoving:Connect(function(player)
 			self:DetachPlayer(player)
+			self:FireAll(2, '[Server]: ', player.DisplayName, 'has left the game')
 		end)
 
 		remote.OnServerEvent:Connect(function(player: Player, data: buffer, bits: number)
