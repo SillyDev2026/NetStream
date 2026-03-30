@@ -216,44 +216,43 @@ end)
 
 ### NetStream
 
-| Method                            | Description                                                                     |
+| Method | Description |
 | --------------------------------- | ------------------------------------------------------------------------------- |
-| `new(remote)`                     | Creates a new NetStream bound to a RemoteEvent.                                 |
-| `start(isServer)`                 | Starts the automatic flushing loop with adaptive send rate based on queue load. |
-| `stop()`                          | Stops the NetStream flushing loop.                                              |
-| `move(x, y, z)`                   | Queues a compressed movement update (unreliable, quantized).                    |
-| `moveVec(Vector3)`                | Same as `move`, but accepts a Vector3.                                          |
-| `stateUpdate(id, value)`          | Sends a state update only if the value has changed (unreliable delta).          |
-| `event(eventId, ...)`             | Sends a reliable event with arguments (includes argument count internally).     |
-| `setLatest(id, value)`            | Stores a value to be sent as a latest snapshot on next flush.                   |
-| `decode(player, data, bitLength)` | Decodes incoming bit-packed messages and updates state/events.                  |
-| `_flush(isServer?)`               | Immediately flushes queued packets (used internally, context-aware).            |
-| `getPlayerState(player)`          | Returns the cached PlayerState object for a player.                             |
-| `bitLen()`                        | Returns last processed packet size in bits.                                     |
-| `byteLen()`                       | Returns last processed packet size in bytes.                                    |
-| `byteFormat(bits)`                | Formats bit size into a human-readable string.                                  |
+| `new(remote)` | Creates a new NetStream instance bound to a RemoteEvent used for bidirectional communication between client and server. |
+| `start(isServer)` | Starts the internal flushing loop that periodically sends queued data, adapting behavior based on queue activity and timing. |
+| `stop()` | Stops the flushing loop and disconnects internal connections, halting all outgoing network transmissions. |
+| `move(x, y, z)` | Queues a compressed movement update by quantizing position values for efficient unreliable transmission. |
+| `moveVec(Vector3)` | Wrapper for `move` that accepts a Vector3 and forwards its components as a movement update. |
+| `stateUpdate(id, value)` | Sends a state update only when the value has changed since the last send, reducing redundant network usage (unreliable). |
+| `event(eventId, ...)` | Queues a reliable event with a variable number of arguments, serializing both arguments and their count for reconstruction. |
+| `setLatest(id, value)` | Stores a key-value pair to be included as the most recent snapshot in the next flush; only the latest value per key is retained. |
+| `decode(player, data, bitLength)` | Parses incoming bit-packed data, reconstructs packets, updates player state, and dispatches events via the configured handler. |
+| `_flush(isServer?)` | Immediately serializes and sends all queued reliable, unreliable, and latest data; primarily used internally. |
+| `getPlayerState(player)` | Retrieves or initializes the cached state table associated with a player. |
+| `bitLen()` | Returns the number of bits written in the most recent outgoing packet. |
+| `byteLen()` | Returns the size of the most recent outgoing packet in bytes. |
+| `byteFormat(bits)` | Converts a bit count into a human-readable string using appropriate units (b, Kb, Mb, Gb). |
 
 ---
 
 ### EventBus
 
-| Method                                     | Description                                                   |
+| Method | Description |
 | ------------------------------------------ | ------------------------------------------------------------- |
-| `Remote(isServer)`                         | Creates an EventBus using the default "Reliable" RemoteEvent. |
-| `Connect(eventId, callback)`               | Subscribes to an event. Callback receives `(player, ...)`.    |
-| `Once(eventId, callback)`                  | Subscribes to an event once.                                  |
-| `Fire(eventId, ...)`                       | Sends a reliable event through NetStream (client ↔ server).   |
-| `SetLatest(eventId, value, targetPlayer?)` | Sends an immediate latest value from server to client.        |
-| `StateUpdate(id, value)`                   | Sends a state update through NetStream.                       |
-| `Move(x, y, z)`                            | Sends a movement update (unreliable).                         |
-| `MoveVec(pos)`                             | Sends a Vector3 movement update (unreliable).                 |
-| `Stop()`                                   | Stops NetStream and disconnects all signals.                  |
-| `decode(player, data, bitLength)`          | Decodes incoming bit-packed data.                             |
-| `len()`                                    | Returns last packet size in bytes.                            |
-| `formatBytes()`                            | Returns formatted packet size string.                         |
+| `Remote(isServer)` | Creates an EventBus instance using a default reliable RemoteEvent, automatically creating or resolving the remote within a shared folder. |
+| `Connect(eventId, callback)` | Subscribes to a specific event ID; the callback is invoked with `(player, ...)` when the event is received. |
+| `Once(eventId, callback)` | Subscribes to a specific event ID for a single invocation, then automatically disconnects. |
+| `Fire(eventId, ...)` | Sends a reliable event through NetStream, transmitting serialized arguments across the network. |
+| `SetLatest(eventId, value, targetPlayer?)` | Sends a value to be treated as the latest state; optionally targets a specific player when used on the server. |
+| `StateUpdate(id, value)` | Sends a state update through NetStream using delta-style behavior (only when values change). |
+| `Move(x, y, z)` | Sends a compressed, unreliable movement update for position replication. |
+| `MoveVec(pos)` | Sends a Vector3-based movement update using the same underlying movement encoding. |
+| `Stop()` | Stops the underlying NetStream instance and disconnects all registered event listeners/signals. |
+| `decode(player, data, bitLength)` | Decodes incoming NetStream data and routes events and state updates to registered handlers. |
+| `len()` | Returns the size of the most recently processed packet in bytes. |
+| `formatBytes()` | Returns a human-readable string representing the size of the most recent packet. |
 
 ---
-
 ### Notes
 
 * Reliable events (`event`) are batched and guaranteed to arrive.
