@@ -1,12 +1,12 @@
--- NetStream.lua
 --!native
 --!optimize 2
 
 local Bitbuff = require(script.Parent.Modules.BitBuffer)
+local BufferPool = require(script.Parent.Modules.BufferPool)
+local RunService = game:GetService('RunService')
 
 local OP_MOVE, OP_STATE, OP_EVENT, OP_LATEST = 1,2,3,4
 local SCALE, INV_SCALE, OFFSET = 100, 1/100, 32768
-local MAXFLUSH = 10
 
 export type Ring<T> = {
 	data: { T },
@@ -18,31 +18,6 @@ export type Ring<T> = {
 export type PlayerState = {
 	Position: Vector3?,
 	[number]: number,
-}
-
-export type NetStream = {
-	remote: any,
-	reliable: Ring<any>,
-	unreliable: Ring<any>,
-	latest: { [number]: number },
-	state: { [number]: number },
-	running: boolean,
-	TargetPlayer: any?,
-	EventHandler: <T...>((player: Player, id: number, T...) -> ()) -> (),
-	_lastBuffer: any?,
-	start: (self: NetStream) -> (),
-	stop: (self: NetStream) -> (),
-	move: (self: NetStream, x: number, y: number, z: number) -> (),
-	moveVec: (self: NetStream, pos: Vector3) -> (),
-	stateUpdate: (self: NetStream, id: number, value: number) -> (),
-	event: <T...>(self: NetStream, T...) -> (),
-	setLatest: (self: NetStream, id: number, value: number) -> (),
-	decode: (self: NetStream, player: any, data: buffer, bitLength: number) -> (),
-	_flush: (self: NetStream, isServer: boolean?) -> (),
-	getPlayerState: (player: any) -> PlayerState,
-	bitLen: (self: NetStream) -> number,
-	byteLen: (self: NetStream) -> number,
-	byteFormat: (self: NetStream, bits: number) -> string,
 }
 
 local PlayerStates: { [any]: PlayerState } = {}
@@ -74,7 +49,9 @@ end
 local NetStreamClass = {}
 NetStreamClass.__index = NetStreamClass
 
-function NetStreamClass.new(remote): NetStream
+function NetStreamClass.new(remote)
+	local pool = BufferPool.new(4096)
+
 	local self = setmetatable({
 		remote = remote,
 		reliable = createRing(512),
@@ -84,22 +61,25 @@ function NetStreamClass.new(remote): NetStream
 		running = false,
 		TargetPlayer = nil,
 		EventHandler = nil,
-		_write = Bitbuff.new(4096),
+		_conn = nil,
+		_pool = pool,
+		_write = pool:acquire(),
+		_accumulator = 0
 	}, NetStreamClass)
 
 	return self
 end
 
 -- Movement
-function NetStreamClass:move(x,y,z)
-	local sx = math.clamp(math.floor(x*SCALE+0.5)+OFFSET,0,65535)
-	local sy = math.clamp(math.floor(y*SCALE+0.5)+OFFSET,0,65535)
-	local sz = math.clamp(math.floor(z*SCALE+0.5)+OFFSET,0,65535)
+function NetStreamClass:move(x, y, z)
+	local sx = math.clamp(math.floor(x * SCALE + 0.5) + OFFSET, 0, 65535)
+	local sy = math.clamp(math.floor(y * SCALE + 0.5) + OFFSET, 0, 65535)
+	local sz = math.clamp(math.floor(z * SCALE + 0.5) + OFFSET, 0, 65535)
 	push(self.unreliable, {OP_MOVE, sx, sy, sz})
 end
 
 function NetStreamClass:moveVec(v)
-	self:move(v.X,v.Y,v.Z)
+	self:move(v.X, v.Y, v.Z)
 end
 
 -- State
@@ -124,7 +104,7 @@ function NetStreamClass:event(id, ...)
 	packet[3] = n
 
 	for i = 1, n do
-		packet[3+i] = select(i, ...)
+		packet[3 + i] = select(i, ...)
 	end
 
 	push(self.reliable, packet)
@@ -132,10 +112,31 @@ end
 
 -- Flush
 function NetStreamClass:_flush(isServer)
-	local buff: Bitbuff.BitBuffer = self._write
+	local buff = self._write
 	buff:reset()
 
-	local function writePacket(packet)
+	-- collect packets first (prevents mid-write pop issues)
+	local packets = {}
+
+	while count(self.reliable) > 0 do
+		table.insert(packets, pop(self.reliable))
+	end
+
+	while count(self.unreliable) > 0 do
+		table.insert(packets, pop(self.unreliable))
+	end
+
+	local latestCount = 0
+	for _ in pairs(self.latest) do
+		latestCount += 1
+	end
+
+	-- FRAME HEADER
+	buff:writeVarInt(#packets)
+	buff:writeVarInt(latestCount)
+
+	-- WRITE PACKETS
+	for _, packet in ipairs(packets) do
 		local op = packet[1]
 
 		buff:writeBits(op, Bitbuff.SetBitsBasedOnLies)
@@ -151,32 +152,19 @@ function NetStreamClass:_flush(isServer)
 
 		elseif op == OP_EVENT then
 			local id = packet[2]
-			local count = packet[3]
+			local n = packet[3]
 
 			buff:writeVarInt(id)
-			buff:writeVarInt(count)
+			buff:writeVarInt(n)
 
-			for i = 1, count do
-				buff:writeValue(packet[3+i])
+			for i = 1, n do
+				buff:writeValue(packet[3 + i])
 			end
-
 		end
 	end
 
-	while true do
-		local pkt = pop(self.reliable)
-		if not pkt then break end
-		writePacket(pkt)
-	end
-
-	while true do
-		local pkt = pop(self.unreliable)
-		if not pkt then break end
-		writePacket(pkt)
-	end
-
-	for k,v in pairs(self.latest) do
-		buff:writeBits(OP_LATEST, Bitbuff.SetBitsBasedOnLies)
+	-- LATEST UPDATES
+	for k, v in pairs(self.latest) do
 		buff:writeVarInt(k)
 		buff:writeVarInt(v)
 	end
@@ -198,43 +186,54 @@ function NetStreamClass:_flush(isServer)
 	end
 end
 
+-- Start / Stop
 function NetStreamClass:start(isServer)
 	if self.running then return end
 	self.running = true
-
-	task.spawn(function()
-		while self.running do
+	local sendRate = 60
+	local interval = 1/ sendRate
+	self._conn = RunService.Heartbeat:Connect(function(dt)
+		if not self.running then return end
+		self._accumulator += dt
+		if self._accumulator >= interval then
+			self._accumulator -= interval
 			if count(self.reliable) > 0 or count(self.unreliable) > 0 or next(self.latest) then
 				self:_flush(isServer)
 			end
-			task.wait(0.05)
 		end
 	end)
 end
 
 function NetStreamClass:stop()
 	self.running = false
+	if self._conn then
+		self._conn:Disconnect()
+		self._conn = nil
+	end
 end
 
--- Decode
+-- Decode (uses pooled buffer, NOT _write)
 function NetStreamClass:decode(player, data, bitLength)
-	local buff: Bitbuff.BitBuffer = self._write
+	local buff = self._pool:acquire()
 	buff:setBuffer(data, bitLength)
+
+	local packetCount = buff:readVarInt()
+	local latestCount = buff:readVarInt()
 
 	PlayerStates[player] = PlayerStates[player] or {}
 	local state = PlayerStates[player]
 
 	local args = {}
 
-	while buff.readPos < bitLength do
+	-- Read packets
+	for _ = 1, packetCount do
 		local op = buff:readBits(Bitbuff.SetBitsBasedOnLies)
 
 		if op == OP_MOVE then
 			local x = (buff:readVarInt() - OFFSET) * INV_SCALE
 			local y = (buff:readVarInt() - OFFSET) * INV_SCALE
 			local z = (buff:readVarInt() - OFFSET) * INV_SCALE
-
-			state.Position = Vector3.new(x,y,z)
+			state.Position = Vector3.new(x, y, z)
 
 		elseif op == OP_STATE then
 			local id = buff:readVarInt()
@@ -243,46 +242,61 @@ function NetStreamClass:decode(player, data, bitLength)
 
 		elseif op == OP_EVENT then
 			local id = buff:readVarInt()
-			local count = buff:readVarInt()
+			local n = buff:readVarInt()
 
-			for i = 1, count do
+			for i = 1, n do
 				args[i] = buff:readValue()
 			end
 
 			if self.EventHandler then
-				self.EventHandler(player, id, table.unpack(args, 1, count))
+				self.EventHandler(player, id, table.unpack(args, 1, n))
 			end
 
 		elseif op == OP_LATEST then
+			-- optional inline latest (not used anymore ideally)
 			local id = buff:readVarInt()
 			local val = buff:readVarInt()
 			state[id] = val
 		end
 	end
+
+	-- Read latest updates
+	for _ = 1, latestCount do
+		local id = buff:readVarInt()
+		local val = buff:readVarInt()
+		state[id] = val
+	end
+
+	self._pool:release(buff)
 end
 
+-- Player state
 function NetStreamClass.getPlayerState(player)
 	PlayerStates[player] = PlayerStates[player] or {}
 	return PlayerStates[player]
 end
 
+-- Utility
 function NetStreamClass:bitLen()
-	return self._buffer.writePos
+	return self._write.writePos
 end
 
 function NetStreamClass:byteLen()
-	return math.ceil(self._buffer.writePos / 8)
+	return math.ceil(self._write.writePos / 8)
 end
 
 function NetStreamClass:byteFormat(bits)
 	if bits <= 0 then return "0 b" end
+
 	local units = {"b","Kb","Mb","Gb"}
-	local v = bits / 8
+	local v = bits
 	local i = 1
+
 	while v >= 1024 and i < #units do
 		v /= 1024
 		i += 1
 	end
+
 	return string.format("%.2f %s", v, units[i])
 end
 
