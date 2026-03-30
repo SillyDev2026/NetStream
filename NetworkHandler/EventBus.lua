@@ -13,8 +13,7 @@ type SignalMap = { [number]: Signal.Signal<any> }
 local EventBus = {}
 EventBus.__index = EventBus
 
--- Remote setup
-local function getEvent(name: string)
+function getEvent(name: string)
 	local isServer = RunService:IsServer()
 
 	local remoteFolder = script.Parent:FindFirstChild("Remotes")
@@ -44,37 +43,47 @@ local function getEvent(name: string)
 	return remote
 end
 
-local function getReliable()
+function getReliable()
 	return getEvent("Reliable")
 end
 
-function EventBus.new(remote: RemoteEvent | UnreliableRemoteEvent, isServer: boolean?)
+function EventBus.new(remote: RemoteEvent, isServer: boolean?)
 	assert(remote, "RemoteEvent required")
 
 	local self = setmetatable({
-		_net = NetStream.new(remote),
+		_remote = remote,
+		_streams = {},
 		_signals = {} :: SignalMap,
 	}, EventBus)
-
-	self._net:start(isServer)
-
-	self._net.EventHandler = function(player: Player, id: number, ...)
-		local signal = self._signals[id]
-		if signal then
-			signal:Fire(player, ...)
-		end
-	end
-
-	self:OnConnect()
 
 	return self
 end
 
-function EventBus.Remote(isServer: boolean)
-	return EventBus.new(getReliable(), isServer)
+function EventBus:AttachPlayer(player: Player)
+	if self._streams[player] then return end
+
+	local stream = NetStream.new(self._remote)
+	stream:start(true)
+	stream.TargetPlayer = player
+
+	stream.EventHandler = function(p: Player, id: number, ...)
+		local signal = self._signals[id]
+		if signal then
+			signal:Fire(p, ...)
+		end
+	end
+
+	self._streams[player] = stream
 end
 
--- Internal helper
+function EventBus:DetachPlayer(player: Player)
+	local stream = self._streams[player]
+	if stream then
+		stream:stop()
+	end
+	self._streams[player] = nil
+end
+
 function EventBus:_getSignal(eventId: number)
 	local sig = self._signals[eventId]
 	if not sig then
@@ -84,43 +93,56 @@ function EventBus:_getSignal(eventId: number)
 	return sig
 end
 
--- Subscribe
 function EventBus:Connect(eventId: number, callback: EventCallback)
 	return self:_getSignal(eventId):Connect(callback)
 end
 
--- Subscribe once
 function EventBus:Once(eventId: number, callback: EventCallback)
 	return self:_getSignal(eventId):Once(callback)
 end
 
--- Fire event
-function EventBus:Fire(eventId: number, ...: any)
-	self._net:event(eventId, ...)
+function EventBus:Fire(eventId: number,  ...: any)
+	local player = Players.LocalPlayer
+	local stream = self._streams[player]
+	if stream then
+		stream:event(eventId, ...)
+	end
 end
 
--- Server → client state sync
-function EventBus:SetLatest(eventId: number, value: number, targetPlayer: Player?)
-	self._net:setLatest(eventId, value, targetPlayer)
+function EventBus:FireToPlayer(player: Player, eventId: number, ...: any)
+	local stream = self._streams[player]
+	if not stream then return end
+
+	stream:event(eventId, ...)
 end
 
--- State update
-function EventBus:StateUpdate(id: number, value: number)
-	self._net:stateUpdate(id, value)
+function EventBus:StateUpdate(player: Player, id: number, value: number)
+	local stream = self._streams[player]
+	if stream then
+		stream:stateUpdate(id, value)
+	end
 end
 
--- Movement helpers
-function EventBus:Move(x: number, y: number, z: number)
-	self._net:move(x, y, z)
+function EventBus:Move(player: Player, x: number, y: number, z: number)
+	local stream = self._streams[player]
+	if stream then
+		stream:move(x, y, z)
+	end
 end
 
-function EventBus:MoveVec(pos: Vector3)
-	self._net:moveVec(pos)
+function EventBus:MoveVec(player: Player, pos: Vector3)
+	local stream = self._streams[player]
+	if stream then
+		stream:moveVec(pos)
+	end
 end
 
--- Stop everything
 function EventBus:Stop()
-	self._net:stop()
+	for player, stream in pairs(self._streams) do
+		stream:stop()
+	end
+
+	table.clear(self._streams)
 
 	for _, sig in pairs(self._signals) do
 		sig:DisconnectAll()
@@ -129,40 +151,92 @@ function EventBus:Stop()
 	table.clear(self._signals)
 end
 
--- Decode incoming buffer
 function EventBus:decode(player: Player, data: buffer, bits: number)
 	if not data or not bits then return end
-	return self._net:decode(player, data, bits)
+
+	local stream = self._streams[player]
+	if stream then
+		stream:decode(player, data, bits)
+	end
 end
 
--- Debug helpers
-function EventBus:len(): number
-	return self._net:byteLen()
+function EventBus:len(player: Player): number
+	local stream = self._streams[player]
+	if stream then
+		return stream:byteLen()
+	end
+	return 0
 end
 
-function EventBus:formatBytes(): string
-	return self._net:byteFormat(self._net:bitLen())
+function EventBus:formatBytes(player: Player): string
+	local stream = self._streams[player]
+	if stream then
+		return stream:byteFormat(stream:bitLen())
+	end
+	return "0 b"
 end
 
 function EventBus:OnConnect()
-	local remote = self._net.remote
+	local remote = self._remote
 
 	if RunService:IsServer() then
-		remote.OnServerEvent:Connect(function(player: Player, data: buffer, bits: number)
-			self:decode(player, data, bits)
+		local function attach(player: Player)
+			if self._streams[player] then return end
+
+			local stream = NetStream.new(remote)
+			stream.TargetPlayer = player
+			stream:start(true)
+
+			stream.EventHandler = function(p: Player, id: number, ...)
+				local signal = self._signals[id]
+				if signal then
+					signal:Fire(p, ...)
+				end
+			end
+
+			self._streams[player] = stream
+		end
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			attach(player)
+		end
+
+		Players.PlayerAdded:Connect(attach)
+
+		Players.PlayerRemoving:Connect(function(player)
+			self:DetachPlayer(player)
 		end)
+
+		remote.OnServerEvent:Connect(function(player: Player, data: buffer, bits: number)
+			local stream = self._streams[player]
+			if stream then
+				stream:decode(player, data, bits)
+			end
+		end)
+
 	else
 		local player = Players.LocalPlayer
+
+		local stream = NetStream.new(remote)
+		stream:start(false)
+
+		self._streams[player] = stream
+
+		stream.EventHandler = function(p: Player, id: number, ...)
+			local signal = self._signals[id]
+			if signal then
+				signal:Fire(p, ...)
+			end
+		end
+
 		remote.OnClientEvent:Connect(function(data, bits)
-			self:decode(player, data, bits)
+			stream:decode(player, data, bits)
 		end)
 	end
 end
 
-function EventBus:FireToPlayer(player: Player, eventId: number, ...)
-	self._net.TargetPlayer = player
-	self._net:event(eventId, ...)
-	self._net.TargetPlayer = nil
+function EventBus.Remote(isServer: boolean)
+	return EventBus.new(getReliable(), isServer)
 end
 
 return EventBus
