@@ -1,327 +1,288 @@
 --!native
 --!optimize 2
 
-local BufferUtil = require(script.Parent.BufferUtil)
+--[[
+    created by SillyDev2026
+    Buffer Utility Module (Luau / Roblox)
 
-local BitBuffer = {}
-BitBuffer.__index = BitBuffer
+    Purpose:
+    - Provide fast, low-level helpers for working with Roblox buffers
+    - Support typed reads/writes (i8, u8, i16, u16, i32, u32, f32, f64)
+    - Support sequential cursor-based access with automatic advancement
+    - Support compiled layouts (struct-like buffers) with named fields
+    - Slice, clone, reverse, fill, and compare buffers
+    - Convert buffers to hex or binary strings for debugging
+    - Efficient for hot paths and memory-sensitive systems
+    - Fully optimized for --!native and --!optimize 2
 
-function zigzagEncode(n: number): number
-	return bit32.bxor(bit32.lshift(n, 1), bit32.rshift(n, 31))
+    Design Philosophy:
+    - Unsafe by design (no bounds checks)
+    - Predictable constant-time operations
+    - Composable for building higher-level serializers, ECS storage, or numeric systems
+
+    This module is intended for:
+    - Serialization and binary packet building
+    - Custom numeric systems (BN, layered numbers, scientific)
+    - ECS / archetype storage
+    - Networking or performance-critical data formats
+
+    Caller is responsible for buffer size, offsets, and type correctness.
+]]
+
+local module = {}
+export type IntType = "i8"|"u8"|"i16"|"u16"|"i32"|"u32"
+export type FloatType = "f32"|"f64"
+export type ValueType = IntType | FloatType
+
+module.Size = {
+	i8  = 1,  u8  = 1,
+	i16 = 2,  u16 = 2,
+	i32 = 4,  u32 = 4,
+	f32 = 4,
+	f64 = 8,
+}
+
+--[[ Creates a new buffer with a fixed byte size
+Example: module.new(12)
+-- 1 byte i8 + 8 bytes f64 + 3 bytes padding
+]]
+function module.new(size: number): buffer
+	return buffer.create(size)
 end
 
-function zigzagDecode(n: number): number
-	return bit32.bxor(bit32.rshift(n, 1), -bit32.band(n, 1))
+-- Returns the length of a buffer in bytes
+function module.len(buff: buffer): number
+	return buffer.len(buff)
 end
 
-function BitBuffer.new(size: number?)
-	local self = setmetatable({}, BitBuffer)
-	self.buffer = BufferUtil.new(size or 64)
-	self.writePos = 0
-	self.readPos = 0 
-	return self
+-- Zero-fills the entire buffer
+function module.clear(buff: buffer): ()
+	buffer.fill(buff, 0, 0, buffer.len(buff))
 end
 
-function BitBuffer:_ensure(byteIndex: number)
-	local len = BufferUtil.len(self.buffer)
-	if byteIndex > len then
-		local newSize = math.max(byteIndex, len * 2)
-		local newBuff = BufferUtil.new(newSize)
-		BufferUtil.copy(newBuff, 0, self.buffer, 0, len)
-		self.buffer = newBuff
+-- Copies raw bytes between buffers
+function module.copy(dst: buffer, doff: number, src: buffer, soff: number, len: number): ()
+	buffer.copy(dst, doff, src, soff, len)
+end
+
+--[[ Writes a value of the given type at a byte offset.
+	⚠ No bounds checking.
+	⚠ Caller must ensure offset + sizeof(type) is valid.
+]]
+function module.write(buff: buffer, typ: ValueType, off: number, val: any)
+	if typ == "i8" then buffer.writei8(buff, off, val)
+	elseif typ == "u8" then buffer.writeu8(buff, off, val)
+	elseif typ == "i16" then buffer.writei16(buff, off, val)
+	elseif typ == "u16" then buffer.writeu16(buff, off, val)
+	elseif typ == "i32" then buffer.writei32(buff, off, val)
+	elseif typ == "u32" then buffer.writeu32(buff, off, val)
+	elseif typ == "f32" then buffer.writef32(buff, off, val)
+	elseif typ == "f64" then buffer.writef64(buff, off, val)
 	end
 end
 
-function BitBuffer:writeBits(value: number, bits: number)
-	assert(bits <= 32)
-
-	if bits == 8 and (self.writePos % 8 == 0) then
-		local index = (self.writePos // 8)
-		self:_ensure(index + 1)
-		buffer.writeu8(self.buffer, index, bit32.band(value, 0xFF))
-		self.writePos += 8
-		return
-	end
-
-	local bitPos = self.writePos
-	local index = math.floor(bitPos / 8)
-	local offset = bitPos % 8
-
-	self:_ensure(index + 4)
-
-	value = bit32.band(value, bit32.lshift(1, bits) - 1)
-
-	local remaining = bits
-	local shift = 0
-
-	while remaining > 0 do
-		local byte = buffer.readu8(self.buffer, index)
-
-		local writeBits = math.min(8 - offset, remaining)
-		local mask = bit32.lshift(bit32.lshift(1, writeBits) - 1, offset)
-
-		byte = bit32.band(byte, bit32.bnot(mask))
-		byte = bit32.bor(byte, bit32.lshift(bit32.extract(value, shift, writeBits), offset))
-
-		buffer.writeu8(self.buffer, index, byte)
-
-		remaining -= writeBits
-		shift += writeBits
-		index += 1
-		offset = 0
-	end
-
-	self.writePos = bitPos + bits
-end
-
-function BitBuffer:readBits(bits: number): number
-	assert(bits <= 32)
-	if bits == 8 and (self.readPos % 8 == 0) then
-		local index = (self.readPos // 8)
-		self.readPos += 8
-		return buffer.readu8(self.buffer, index)
-	end
-
-	local bitPos = self.readPos
-	local index = math.floor(bitPos / 8)
-	local offset = bitPos % 8
-
-	local result = 0
-	local shift = 0
-	local remaining = bits
-
-	while remaining > 0 do
-		local byte = buffer.readu8(self.buffer, index)
-
-		local readBits = math.min(8 - offset, remaining)
-		local chunk = bit32.extract(byte, offset, readBits)
-
-		result = bit32.bor(result, bit32.lshift(chunk, shift))
-
-		remaining -= readBits
-		shift += readBits
-		index += 1
-		offset = 0
-	end
-
-	self.readPos = bitPos + bits
-	return result
-end
-
-function BitBuffer:writeBool(b: boolean)
-	self:writeBits(b and 1 or 0, 1)
-end
-
-function BitBuffer:readBool(): boolean
-	return self:readBits(1) == 1
-end
-
-function BitBuffer:writeVarInt(n: number)
-	while n >= 0x80 do
-		self:writeBits(bit32.bor(bit32.band(n, 0x7F), 0x80), 8)
-		n = bit32.rshift(n, 7)
-	end
-	self:writeBits(n, 8)
-end
-
-function BitBuffer:readVarInt(): number
-	local shift = 0
-	local result = 0
-
-	while true do
-		local byte = self:readBits(8)
-		result = bit32.bor(result, bit32.lshift(bit32.band(byte, 0x7F), shift))
-		if bit32.band(byte, 0x80) == 0 then break end
-		shift += 7
-	end
-
-	return result
-end
-
-function BitBuffer:writeInt(n: number)
-	self:writeVarInt(zigzagEncode(n))
-end
-
-function BitBuffer:readInt(): number
-	return zigzagDecode(self:readVarInt())
-end
-
-function BitBuffer:writeFloat(n: number)
-	local packed = string.pack("d", n)
-	for i = 1, 8 do
-		self:writeBits(packed:byte(i), 8)
+--[[ Reads a value of the given type at a byte offset.
+	⚠ No bounds checking.
+]]
+function module.read(buff: buffer, typ: ValueType, off: number)
+	if typ == "i8" then return buffer.readi8(buff, off)
+	elseif typ == "u8" then return buffer.readu8(buff, off)
+	elseif typ == "i16" then return buffer.readi16(buff, off)
+	elseif typ == "u16" then return buffer.readu16(buff, off)
+	elseif typ == "i32" then return buffer.readi32(buff, off)
+	elseif typ == "u32" then return buffer.readu32(buff, off)
+	elseif typ == "f32" then return buffer.readf32(buff, off)
+	elseif typ == "f64" then return buffer.readf64(buff, off)
 	end
 end
 
-function BitBuffer:readFloat(): number
-	local bytes = table.create(8)
-	for i = 1, 8 do
-		bytes[i] = self:readBits(8)
-	end
-	return string.unpack("d", string.char(table.unpack(bytes)))
+--[[ Creates a cursor object for sequential reading/writing.
+	The cursor tracks a mutable byte position.
+]]
+function module.cursor(buff: buffer, pos: number): {buff: buffer, pos: number}
+	return {buff = buff, pos = pos}
 end
 
-function BitBuffer:writeStringRaw(str: string)
-	self:writeVarInt(#str)
-	for i = 1, #str do
-		self:writeBits(str:byte(i), 8)
+--[[ Writes a value at the cursor position
+	and automatically advances the cursor.
+	Used for sequential packing.
+]]
+function module.writeNext(cur, typ: ValueType, val: any)
+	local p = cur.pos
+	if typ == "i8" then
+		buffer.writei8(cur.buff, p, val)
+		cur.pos = p + 1
+	elseif typ == "u8" then
+		buffer.writeu8(cur.buff, p, val)
+		cur.pos = p + 1
+	elseif typ == "i16" then
+		buffer.writei16(cur.buff, p, val)
+		cur.pos = p + 2
+	elseif typ == "u16" then
+		buffer.writeu16(cur.buff, p, val)
+		cur.pos = p + 2
+	elseif typ == "i32" then
+		buffer.writei32(cur.buff, p, val)
+		cur.pos = p + 4
+	elseif typ == "u32" then
+		buffer.writeu32(cur.buff, p, val)
+		cur.pos = p + 4
+	elseif typ == "f32" then
+		buffer.writef32(cur.buff, p, val)
+		cur.pos = p + 4
+	elseif typ == "f64" then
+		buffer.writef64(cur.buff, p, val)
+		cur.pos = p + 8
 	end
 end
 
-function BitBuffer:readStringRaw(): string
-	local len = self:readVarInt()
-	local chars = table.create(len)
-	for i = 1, len do
-		chars[i] = string.char(self:readBits(8))
+--[[ Reads a value at the cursor position
+	and automatically advances the cursor.
+]]
+function module.readNext(cur, typ: ValueType)
+	local p = cur.pos
+	if typ == "i8" then
+		cur.pos = p + 1
+		return buffer.readi8(cur.buff, p)
+	elseif typ == "u8" then
+		cur.pos = p + 1
+		return buffer.readu8(cur.buff, p)
+	elseif typ == "i16" then
+		cur.pos = p + 2
+		return buffer.readi16(cur.buff, p)
+	elseif typ == "u16" then
+		cur.pos = p + 2
+		return buffer.readu16(cur.buff, p)
+	elseif typ == "i32" then
+		cur.pos = p + 4
+		return buffer.readi32(cur.buff, p)
+	elseif typ == "u32" then
+		cur.pos = p + 4
+		return buffer.readu32(cur.buff, p)
+	elseif typ == "f32" then
+		cur.pos = p + 4
+		return buffer.readf32(cur.buff, p)
+	elseif typ == "f64" then
+		cur.pos = p + 8
+		return buffer.readf64(cur.buff, p)
 	end
-	return table.concat(chars)
 end
 
-local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_TABLE = 0,1,2,3,4,5
-function isArray(tbl)
-	local n = #tbl
-	for k in pairs(tbl) do
-		if type(k) ~= "number" or k < 1 or k > n then
-			return false
+-- Returns the byte size of a given primitive type
+function module.sizeOf(typ: ValueType): number
+	return module.Size[typ]
+end
+
+-- useful for padding or skipping fields
+function module.advanced(cur, typ: ValueType)
+	cur.pos = cur.pos + module.Size[typ]
+end
+
+--[[ Compiles a layout into fixed offsets.
+	Input:
+		{ "i8", "f64", "i32" }
+	Output:
+		{
+			size = total byte size,
+			off = { [1]=0, [2]=1, [3]=9 }
+		}
+	Run once, reuse forever.
+]]
+function module.compileLayout(lay): {size: number, off: {[string]: number}}
+	local off = {}
+	local cursor = 0
+	for i = 1, #lay do
+		local f = lay[i]
+		off[f] = cursor
+		cursor = cursor + module.Size[f]
+	end
+	return {size = cursor, off = off}
+end
+
+-- Creates a buffer sized exactly for a compiled layout
+function module.structNew(lay)
+	assert(lay.size, "Layout must be compiled with module.compileLayout first")
+	return buffer.create(lay.size)
+end
+
+-- Reads a field from a structured buffer
+function module.structGet(buff: buffer, lay, field, typ: ValueType)
+	return module.read(buff, typ, lay.off[field])
+end
+
+-- Writes a field into a structured buffer
+function module.structSet(buff: buffer, lay, field, typ: ValueType, val: any)
+	module.write(buff, typ, lay.off[field], val)
+end
+
+-- Slices a buffer into a new buffer (fast, zero copy if possible)
+function module.slice(buff: buffer, start: number, len: number): buffer
+	local out = buffer.create(len)
+	buffer.copy(out, 0, buff, start, len)
+	return out
+end
+
+-- fill a range of buffer with a single value
+function module.fillRange(buff: buffer, start: number, len: number, val: number)
+	for i = 0, len - 1 do
+		buffer.writeu8(buff, start + i, val)
+	end
+end
+
+-- Reverse the bytes in a buffer
+function module.reverse(buff: buffer): ()
+	local len = buffer.len(buff)
+	for i = 0, (len // 2) - 1 do
+		local a = buffer.readu8(buff, i)
+		local b = buffer.readu8(buff, len - i - 1)
+		buffer.writeu8(buff, i, b)
+		buffer.writeu8(buff, len - i - 1, a)
+	end
+end
+
+-- Compare two buffers (returns -1 if a < b, 0 if equal, 1 if a > b)
+function module.compare(a: buffer, b: buffer): number
+	local len = math.min(buffer.len(a), buffer.len(b))
+	for i = 0, len - 1 do
+		local va = buffer.readu8(a, i)
+		local vb = buffer.readu8(b, i)
+		if va < vb then return -1 end
+		if va > vb then return 1 end
+	end
+	if buffer.len(a) < buffer.len(b) then return -1
+	elseif buffer.len(a) > buffer.len(b) then return 1
+	end
+	return 0
+end
+
+-- Clone a buffer
+function module.clone(buff: buffer): buffer
+	local out = buffer.create(buffer.len(buff))
+	buffer.copy(out, 0, buff, 0, buffer.len(buff))
+	return out
+end
+
+-- Convert a numeric buffer to hex string (useful for debugging)
+function module.toHex(buff: buffer): string
+	local s = {}
+	for i = 0, buffer.len(buff) - 1 do
+		s[i + 1] = string.format('%02X', buffer.readu8(buff, i))
+	end
+	return table.concat(s)
+end
+
+-- Convert a buffer to binary string (debugging or serialization)
+function module.toBinaryString(buff: buffer): string
+	local s = {}
+	for i = 0, buffer.len(buff)-1 do
+		local byte = buffer.readu8(buff, i)
+		local bin = ""
+		for b = 7, 0, -1 do
+			bin = bin .. (bit32.extract(byte, b) == 1 and "1" or "0")
 		end
+		s[i+1] = bin
 	end
-	return true
+	return table.concat(s)
 end
 
-function BitBuffer:writeValue(value, seen)
-	seen = seen or {}
-	local t = type(value)
-
-	if value == nil then
-		self:writeBits(TYPE_NIL, 3)
-
-	elseif t == "boolean" then
-		self:writeBits(TYPE_BOOL, 3)
-		self:writeBool(value)
-
-	elseif t == "number" then
-		if math.floor(value) == value then
-			self:writeBits(TYPE_INT, 3)
-			self:writeInt(value)
-		else
-			self:writeBits(TYPE_FLOAT, 3)
-			self:writeFloat(value)
-		end
-
-	elseif t == "string" then
-		self:writeBits(TYPE_STRING, 3)
-		self:writeStringRaw(value)
-
-	elseif t == "table" then
-		self:writeBits(TYPE_TABLE, 3)
-		self:writeTable(value, seen)
-
-	else
-		error("Unsupported type: " .. t)
-	end
-end
-
-function BitBuffer:readValue()
-	local typeTag = self:readBits(3)
-
-	if typeTag == TYPE_NIL then
-		return nil
-	elseif typeTag == TYPE_BOOL then
-		return self:readBool()
-	elseif typeTag == TYPE_INT then
-		return self:readInt()
-	elseif typeTag == TYPE_FLOAT then
-		return self:readFloat()
-	elseif typeTag == TYPE_STRING then
-		return self:readStringRaw()
-	elseif typeTag == TYPE_TABLE then
-		return self:readTable()
-	else
-		error("Unknown type")
-	end
-end
-
-function BitBuffer:writeTable(tbl, seen)
-	seen = seen or {}
-	if seen[tbl] then error("Circular table") end
-	seen[tbl] = true
-
-	local arrayMode = isArray(tbl)
-	self:writeBool(arrayMode)
-
-	if arrayMode then
-		self:writeVarInt(#tbl)
-		for i = 1, #tbl do
-			self:writeValue(tbl[i], seen)
-		end
-	else
-		local count = 0
-		for _ in pairs(tbl) do count += 1 end
-		self:writeVarInt(count)
-		for k,v in pairs(tbl) do
-			self:writeValue(k, seen)
-			self:writeValue(v, seen)
-		end
-	end
-
-	seen[tbl] = nil
-end
-
-function BitBuffer:readTable()
-	local arrayMode = self:readBool()
-
-	if arrayMode then
-		local len = self:readVarInt()
-		local t = table.create(len)
-		for i = 1, len do
-			t[i] = self:readValue()
-		end
-		return t
-	else
-		local count = self:readVarInt()
-		local t = {}
-		for _ = 1, count do
-			t[self:readValue()] = self:readValue()
-		end
-		return t
-	end
-end
-
-function BitBuffer:write(...: any)
-	local n = select("#", ...)
-	self:writeVarInt(n)
-	for i = 1, n do
-		self:writeValue(select(i, ...))
-	end
-end
-
-function BitBuffer:read(): ...any
-	local n = self:readVarInt()
-	if n == 1 then return self:readValue() end
-
-	local t = table.create(n)
-	for i = 1, n do
-		t[i] = self:readValue()
-	end
-	return table.unpack(t, 1, n)
-end
-
-function BitBuffer:getBuffer(): buffer
-	return self.buffer
-end
-
-function BitBuffer:setBuffer(buff: buffer, bitLength: number?)
-	self.buffer = buff
-	self.readPos = 0
-	self.writePos = bitLength or (BufferUtil.len(buff)*8)
-end
-
-function BitBuffer:getByteLength(): number
-	return math.ceil(self.writePos / 8)
-end
-
-function BitBuffer:reset()
-	self.readPos = 0
-end
-
-return BitBuffer
+return module
