@@ -1,8 +1,6 @@
 --!native
 --!optimize 2
 
--- Node-like internal state is not exposed externally, but helps describe linked behavior
-
 export type BitBuffer = {
 	-- Core positions
 	writePos: number,
@@ -57,6 +55,11 @@ export type BitBuffer = {
 	-- Utility
 	getByteLength: (self: BitBuffer) -> number,
 	reset: (self: BitBuffer) -> (),
+	writeDouble: (self: BitBuffer, n: number) -> (),
+	readDouble: (self: BitBuffer) -> number,
+
+	writeInstance: (self: BitBuffer, inst: Instance) -> (),
+	readInstance: (self: BitBuffer) -> Instance?,
 }
 
 type BitBufferInternal = {
@@ -129,18 +132,18 @@ function BitBuffer.new(size: number?): BitBuffer
 	return self:: BitBuffer
 end
 
+function BitBuffer:_ensureBytes(byteCount: number)
+	local len = BufferUtil.len(self.buffer)
+	if byteCount > len then
+		local newSize = math.max(byteCount, len*2)
+		self.buffer = BufferUtil.resize(self.buffer, newSize)
+	end
+end
+
 --[[Ensures the buffer has enough capacity to store the given number of bits.
 @param bitCount number]]
 function BitBuffer:_ensureBits(bitCount: number)
-	local neededBytes = math.ceil(bitCount / 8)
-	local len = BufferUtil.len(self.buffer)
-
-	if neededBytes > len then
-		local newSize = math.max(neededBytes, len * 2)
-		local newBuff = BufferUtil.new(newSize)
-		BufferUtil.copy(newBuff, 0, self.buffer, 0, len)
-		self.buffer = newBuff
-	end
+	self:_ensureBytes(math.ceil(bitCount/8))
 end
 
 --[[Aligns the write position to the next byte boundary by padding with zeros.]]
