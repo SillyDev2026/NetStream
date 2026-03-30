@@ -376,7 +376,7 @@ type PlayerState = {
 ## Download here
 u will be able to access the full module without manually copy and paste and yes i did zip the module there is 0 worry about backdoors since im a dev who wants to push newer features out that are fun to use and ez without doing much overhead any suggestions join my Discord
 
-updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26343046/NetworkHandler.zip)
+updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26358066/NetworkHandler.zip)
 after downloading Extract all then copy it to Roblox
 
 
