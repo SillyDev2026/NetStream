@@ -1,6 +1,8 @@
 --!native
 --!optimize 2
 
+-- Node-like internal state is not exposed externally, but helps describe linked behavior
+
 export type BitBuffer = {
 	-- Core positions
 	writePos: number,
@@ -55,11 +57,6 @@ export type BitBuffer = {
 	-- Utility
 	getByteLength: (self: BitBuffer) -> number,
 	reset: (self: BitBuffer) -> (),
-	writeDouble: (self: BitBuffer, n: number) -> (),
-	readDouble: (self: BitBuffer) -> number,
-
-	writeInstance: (self: BitBuffer, inst: Instance) -> (),
-	readInstance: (self: BitBuffer) -> Instance?,
 }
 
 type BitBufferInternal = {
@@ -79,8 +76,8 @@ BitBuffer.__index = BitBuffer
 local MAX_VARINT_BITS = 35
 local SetBitsBasedOnLies = BitBuffer.SetBitsBasedOnLies
 
-local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_DOUBLE, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3, TYPE_INSTANCE =
-	0,1,2,3,4,5,6,7,8
+local TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_DOUBLE, TYPE_STRING, TYPE_TABLE, TYPE_VECTOR3, TYPE_INSTANCE, TYPE_CFRAME, TYPE_BUFFER =
+	0,1,2,3,4,5,6,7,8,9,10
 
 function getInstance(inst: Instance): string
 	return inst:GetFullName()
@@ -132,18 +129,18 @@ function BitBuffer.new(size: number?): BitBuffer
 	return self:: BitBuffer
 end
 
-function BitBuffer:_ensureBytes(byteCount: number)
-	local len = BufferUtil.len(self.buffer)
-	if byteCount > len then
-		local newSize = math.max(byteCount, len*2)
-		self.buffer = BufferUtil.resize(self.buffer, newSize)
-	end
-end
-
 --[[Ensures the buffer has enough capacity to store the given number of bits.
 @param bitCount number]]
 function BitBuffer:_ensureBits(bitCount: number)
-	self:_ensureBytes(math.ceil(bitCount/8))
+	local neededBytes = math.ceil(bitCount / 8)
+	local len = BufferUtil.len(self.buffer)
+
+	if neededBytes > len then
+		local newSize = math.max(neededBytes, len * 2)
+		local newBuff = BufferUtil.new(newSize)
+		BufferUtil.copy(newBuff, 0, self.buffer, 0, len)
+		self.buffer = newBuff
+	end
 end
 
 --[[Aligns the write position to the next byte boundary by padding with zeros.]]
@@ -379,6 +376,23 @@ function BitBuffer:readVector3()
 	)
 end
 
+function BitBuffer:writeCFrame(cf: CFrame)
+	local pos = cf.Position
+	local rx, ry, rz = cf:ToEulerAnglesXYZ()
+	self:writeVector3(pos)
+	self:writeDouble(rx)
+	self:writeDouble(ry)
+	self:writeDouble(rz)
+end
+
+function BitBuffer:readCFrame(): CFrame
+	local pos = self:readVector3()
+	local rx = self:readDouble()
+	local ry = self:readDouble()
+	local rz = self:readDouble()
+	return CFrame.new(pos) * CFrame.Angles(rx, ry, rz)
+end
+
 --[[Writes a string with a length prefix.
 @param str string]]
 function BitBuffer:writeString(str: string)
@@ -433,6 +447,34 @@ function BitBuffer:readInstance(): Instance?
 	return searchForInstance(path)
 end
 
+function BitBuffer:writeBuffer(buff: buffer)
+	self:alignToByte()
+
+	self:writeVarInt(BufferUtil.len(buff))
+
+	local index = self.writePos // 8
+	local len = BufferUtil.len(buff)
+
+	self:_ensureBits(self.writePos + len * 8)
+
+	BufferUtil.copy(self.buffer, index, buff, 0, len)
+
+	self.writePos += len * 8
+end
+
+function BitBuffer:readBuffer(): buffer
+	self:alignReadToByte()
+
+	local len = self:readVarInt()
+	local index = self.readPos // 8
+
+	local newBuff = BufferUtil.new(len)
+	BufferUtil.copy(newBuff, 0, self.buffer, index, len)
+
+	self.readPos += len * 8
+	return newBuff
+end
+
 --[[Writes a dynamically typed value (nil, boolean, number, string, Vector3, table).
 @param value any
 @param seen table?]]
@@ -472,6 +514,12 @@ function BitBuffer:writeValue(value: any, seen)
 	elseif typeof(value) == 'Instance' then
 		self:writeBits(TYPE_INSTANCE, SetBitsBasedOnLies)
 		self:writeInstance(value)
+	elseif typeof(value) == 'CFrame' then
+		self:writeBits(TYPE_CFRAME, SetBitsBasedOnLies)
+		self:writeCFrame(value)
+	elseif typeof(value) == "buffer" then
+		self:writeBits(TYPE_BUFFER, SetBitsBasedOnLies)
+		self:writeBuffer(value)
 	else
 		error("Unsupported type")
 	end
@@ -500,6 +548,10 @@ function BitBuffer:readValue()
 		return self:readDouble()
 	elseif typeTag == TYPE_INSTANCE then
 		return self:readInstance()
+	elseif typeTag == TYPE_CFRAME then
+		return self:readCFrame()
+	elseif typeTag == TYPE_BUFFER then
+		return self:readBuffer()
 	end
 
 	error("Unknown type")
