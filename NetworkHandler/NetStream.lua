@@ -6,13 +6,12 @@ local BufferPool = require(script.Parent.Modules.BufferPool)
 local BufferUtil = require(script.Parent.Modules.BufferUtil)
 local RunService = game:GetService("RunService")
 
-local OP_MOVE, OP_STATE, OP_EVENT = 1, 2, 3
+local OP_MOVE, OP_STATE, OP_EVENT, OP_CALL, OP_RETURN = 1, 2, 3, 4, 5
 local SCALE, INV_SCALE, OFFSET = 100, 1/100, 32768
 
 local NetStreamClass = {}
 NetStreamClass.__index = NetStreamClass
 
--- Ring buffer
 function createRing(size)
 	return { data = table.create(size), head = 1, tail = 1, size = size }
 end
@@ -37,10 +36,8 @@ function count(ring)
 	return (ring.tail - ring.head + ring.size) % ring.size
 end
 
--- Player state cache
 local PlayerStates = {}
 
--- Constructor
 function NetStreamClass.new(remote)
 	local self = setmetatable({
 		remote = remote,
@@ -49,18 +46,24 @@ function NetStreamClass.new(remote)
 		latest = {},
 		state = {},
 		running = false,
+
 		EventHandler = nil,
+		CallHandler = nil,
+
+		_pending = {},
+		_requestId = 0,
+
 		_conn = nil,
 		_pool = BufferPool.new(4096),
 		_accumulator = 0,
 		_lastBits = 0,
+
 		TargetPlayer = nil,
 	}, NetStreamClass)
 
 	return self
 end
 
--- Movement
 function NetStreamClass:move(x, y, z)
 	local sx = math.clamp(math.floor(x * SCALE + 0.5) + OFFSET, 0, 65535)
 	local sy = math.clamp(math.floor(y * SCALE + 0.5) + OFFSET, 0, 65535)
@@ -73,7 +76,6 @@ function NetStreamClass:moveVec(v)
 	self:move(v.X, v.Y, v.Z)
 end
 
--- State
 function NetStreamClass:stateUpdate(id, value)
 	if self.state[id] == value then return end
 	self.state[id] = value
@@ -85,7 +87,6 @@ function NetStreamClass:setLatest(id, value)
 	self.latest[id] = value
 end
 
--- Event
 function NetStreamClass:event(id, ...)
 	local n = select("#", ...)
 	local packet = table.create(3 + n)
@@ -100,6 +101,52 @@ function NetStreamClass:event(id, ...)
 
 	push(self.reliable, packet)
 end
+
+function NetStreamClass:call(id, ...)
+	self._requestId += 1
+	local reqId = self._requestId
+
+	local thread = coroutine.running()
+	assert(thread, "NetStream:call() must be called inside a yielding thread")
+
+	self._pending[reqId] = thread
+
+	local n = select("#", ...)
+	local packet = table.create(4 + n)
+
+	packet[1] = OP_CALL
+	packet[2] = id
+	packet[3] = reqId
+	packet[4] = n
+
+	for i = 1, n do
+		packet[4 + i] = select(i, ...)
+	end
+
+	push(self.reliable, packet)
+
+	return coroutine.yield()
+end
+
+function NetStreamClass:_return(reqId, ...)
+	local n = select("#", ...)
+	local packet = table.create(3 + n)
+
+	packet[1] = OP_RETURN
+	packet[2] = reqId
+	packet[3] = n
+
+	for i = 1, n do
+		packet[3 + i] = select(i, ...)
+	end
+
+	push(self.reliable, packet)
+end
+
+function NetStreamClass:onCall(fn)
+	self.CallHandler = fn
+end
+
 
 function NetStreamClass:_flush(isServer)
 	local buff = self._pool:acquire()
@@ -120,11 +167,9 @@ function NetStreamClass:_flush(isServer)
 		latestCount += 1
 	end
 
-	-- Header
 	buff:writeVarInt(#packets)
 	buff:writeVarInt(latestCount)
 
-	-- Packets
 	for _, packet in ipairs(packets) do
 		local op = packet[1]
 		buff:writeBits(op, Bitbuff.SetBitsBasedOnLies)
@@ -139,10 +184,29 @@ function NetStreamClass:_flush(isServer)
 			buff:writeVarInt(packet[3])
 
 		elseif op == OP_EVENT then
-			local id = packet[2]
-			local n = packet[3]
+			local id, n = packet[2], packet[3]
+			buff:writeVarInt(id)
+			buff:writeVarInt(n)
+
+			for i = 1, n do
+				buff:writeValue(packet[3 + i])
+			end
+
+		elseif op == OP_CALL then
+			local id, reqId, n = packet[2], packet[3], packet[4]
 
 			buff:writeVarInt(id)
+			buff:writeVarInt(reqId)
+			buff:writeVarInt(n)
+
+			for i = 1, n do
+				buff:writeValue(packet[4 + i])
+			end
+
+		elseif op == OP_RETURN then
+			local reqId, n = packet[2], packet[3]
+
+			buff:writeVarInt(reqId)
 			buff:writeVarInt(n)
 
 			for i = 1, n do
@@ -151,7 +215,6 @@ function NetStreamClass:_flush(isServer)
 		end
 	end
 
-	-- Latest
 	for k, v in pairs(self.latest) do
 		buff:writeVarInt(k)
 		buff:writeVarInt(v)
@@ -165,10 +228,9 @@ function NetStreamClass:_flush(isServer)
 	self._lastBits = bits
 
 	if bits > 0 then
-		local target = self.TargetPlayer
 		if isServer then
-			if target then
-				self.remote:FireClient(target, data, bits)
+			if self.TargetPlayer then
+				self.remote:FireClient(self.TargetPlayer, data, bits)
 			else
 				self.remote:FireAllClients(data, bits)
 			end
@@ -180,7 +242,7 @@ function NetStreamClass:_flush(isServer)
 	self._pool:release(buff)
 end
 
--- Start
+
 function NetStreamClass:start(isServer)
 	if self.running then return end
 	self.running = true
@@ -210,7 +272,6 @@ function NetStreamClass:stop()
 	end
 end
 
--- Decode
 function NetStreamClass:decode(player, data, bitLength)
 	local buff = self._pool:acquire()
 	buff:setBuffer(data, bitLength)
@@ -241,12 +302,43 @@ function NetStreamClass:decode(player, data, bitLength)
 			local id = buff:readVarInt()
 			local n = buff:readVarInt()
 
+			table.clear(args)
 			for i = 1, n do
 				args[i] = buff:readValue()
 			end
 
 			if self.EventHandler then
 				self.EventHandler(player, id, table.unpack(args, 1, n))
+			end
+
+		elseif op == OP_CALL then
+			local id = buff:readVarInt()
+			local reqId = buff:readVarInt()
+			local n = buff:readVarInt()
+
+			table.clear(args)
+			for i = 1, n do
+				args[i] = buff:readValue()
+			end
+
+			if self.CallHandler then
+				local results = {self.CallHandler(player, id, table.unpack(args, 1, n))}
+				self:_return(reqId, table.unpack(results))
+			end
+
+		elseif op == OP_RETURN then
+			local reqId = buff:readVarInt()
+			local n = buff:readVarInt()
+
+			table.clear(args)
+			for i = 1, n do
+				args[i] = buff:readValue()
+			end
+
+			local thread = self._pending[reqId]
+			if thread then
+				self._pending[reqId] = nil
+				task.spawn(thread, table.unpack(args, 1, n))
 			end
 		end
 	end
@@ -260,7 +352,6 @@ function NetStreamClass:decode(player, data, bitLength)
 	self._pool:release(buff)
 end
 
--- Utils
 function NetStreamClass:bitLen()
 	return self._lastBits or 0
 end
