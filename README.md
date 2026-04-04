@@ -79,7 +79,7 @@ local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
 local RemoteEvent = game.ReplicatedStorage.RemoteEvent
 
-local new = EventBus.Remote(true)
+local new = EventBus.ReliableEvent()
 local net = {}
 local non = {}
 
@@ -116,7 +116,7 @@ local RunService = game:GetService('RunService')
 
 local RS = game:GetService("RunService")
 
-local new = EventBus.Remote(false)
+local new = EventBus.ReliableEvent() -- used to be Remote(true) or Remote(false) -- now its determited in EventBus
 
 local Remote = false
 local NetRemote = false
@@ -162,7 +162,7 @@ local RunService = game:GetService("RunService")
 local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
 -- Create Unreliable EventBus
-local Unreliable = EventBus.Remote()
+local Unreliable = EventBus.ReliableEvent()
 
 -- Handle incoming events from clients
 Unreliable:Connect(2, function(_, pos)
@@ -192,7 +192,7 @@ local player = Players.LocalPlayer
 local root = player.Character:WaitForChild("HumanoidRootPart")
 
 -- Create the Reliable EventBus
-local Reliable = EventBus.Remote(false)
+local Reliable = EventBus.ReliableEvent()
 
 -- This will automatically connect OnClientEvent internally
 Reliable:Connect(2, function(_, pos)
@@ -211,7 +211,7 @@ end)
 ```lua
 -- server
 local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
-local new = EventBus.Remote(true)
+local new = EventBus.ReliableEvent()
 -- dont need todo anything down here -- it auto does it for u
 ```
 
@@ -219,7 +219,7 @@ local new = EventBus.Remote(true)
 -- client
 local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
 
-local new = EventBus.Remote(false)
+local new = EventBus.ReliableEvent()
 local TextChat = game:GetService("TextChatService")
 TextChat.ChatWindowConfiguration.TextSize = 16
 local Channel: TextChannel = TextChat:WaitForChild("TextChannels"):WaitForChild("RBXGeneral")
@@ -283,6 +283,28 @@ TextChatService.OnIncomingMessage = function(message)
 
 	return nil
 end
+```
+
+-- remote funciton example server
+```lua
+local EventBus = require('@game/ReplicatedStorage/NetworkHandler/EventBus').ReliableFunction()
+
+EventBus:OnCall(function(player, id, val)
+	return val
+end)
+```
+-- remote function client
+```lua
+local EventBus = require(game.ReplicatedStorage.NetworkHandler.EventBus)
+
+local new = EventBus.ReliableEvent()
+local RunService = game:GetService('RunService')
+
+RunService.Heartbeat:Connect(function()
+	local result = new:Call(1, os.clock())
+	local now = (os.clock()-result)*1000
+	print(`Ping: {now}ms`)
+end)
 ```
 ---
 
