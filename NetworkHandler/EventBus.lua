@@ -4,6 +4,7 @@
 local NetStream = require(script.Parent.NetStream)
 local Signal = require(script.Parent.Modules.Signal)
 local RoleSystem = require(script.Parent.Modules.RoleSystem)
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
@@ -14,114 +15,118 @@ type SignalMap = { [number]: Signal.Signal<any> }
 local EventBus = {}
 EventBus.__index = EventBus
 
-function getEvent(name: string)
+function getRemote(name: string, isFunction: boolean?)
 	local isServer = RunService:IsServer()
 
-	local remoteFolder = script.Parent:FindFirstChild("Remotes")
+	local folder = script.Parent:FindFirstChild("Remotes")
 
-	if not remoteFolder then
+	if not folder then
 		if isServer then
-			remoteFolder = Instance.new("Folder")
-			remoteFolder.Name = "Remotes"
-			remoteFolder.Parent = script.Parent
+			folder = Instance.new("Folder")
+			folder.Name = "Remotes"
+			folder.Parent = script.Parent
 		else
-			remoteFolder = script.Parent:WaitForChild("Remotes")
+			folder = script.Parent:WaitForChild("Remotes")
 		end
 	end
 
-	local remote = remoteFolder:FindFirstChild(name)
+	local remote = folder:FindFirstChild(name)
 
 	if not remote then
 		if isServer then
-			remote = Instance.new("RemoteEvent")
+			remote = isFunction and Instance.new("RemoteFunction") or Instance.new("RemoteEvent")
 			remote.Name = name
-			remote.Parent = remoteFolder
+			remote.Parent = folder
 		else
-			remote = remoteFolder:WaitForChild(name)
+			remote = folder:WaitForChild(name)
 		end
 	end
 
 	return remote
 end
 
-function getReliable()
-	return getEvent("Reliable")
+function getReliableEvent()
+	return getRemote("ReliableEvent", false)
 end
 
-function EventBus.new(remote: RemoteEvent, isServer: boolean?)
-	assert(remote, "RemoteEvent required")
+function getReliableFunction()
+	return getRemote("ReliableFunction", true)
+end
+
+function EventBus.new(remote: Instance)
+	assert(remote, "Remote required")
 
 	local self = setmetatable({
 		_remote = remote,
 		_streams = {},
 		_signals = {} :: SignalMap,
+		_isFunction = remote:IsA("RemoteFunction"),
 	}, EventBus)
-	self:OnConnect()
 
+	self:OnConnect()
 	return self
 end
 
-function EventBus:AttachPlayer(player: Player)
-	if self._streams[player] then return end
-
-	local stream = NetStream.new(self._remote)
-	stream:start(true)
-	stream.TargetPlayer = player
-
-	stream.EventHandler = function(p: Player, id: number, ...)
-		local signal = self._signals[id]
-		if signal then
-			signal:Fire(p, ...)
-		end
-	end
-
-	self._streams[player] = stream
-end
-
-function EventBus:DetachPlayer(player: Player)
-	local stream = self._streams[player]
-	if stream then
-		stream:stop()
-	end
-	self._streams[player] = nil
-end
-
-function EventBus:_getSignal(eventId: number)
-	local sig = self._signals[eventId]
+function EventBus:_getSignal(id: number)
+	local sig = self._signals[id]
 	if not sig then
 		sig = Signal.new()
-		self._signals[eventId] = sig
+		self._signals[id] = sig
 	end
 	return sig
 end
 
-function EventBus:Connect(eventId: number, callback: EventCallback)
-	return self:_getSignal(eventId):Connect(callback)
+function EventBus:Connect(id: number, callback: EventCallback)
+	return self:_getSignal(id):Connect(callback)
 end
 
-function EventBus:Once(eventId: number, callback: EventCallback)
-	return self:_getSignal(eventId):Once(callback)
+function EventBus:Once(id: number, callback: EventCallback)
+	return self:_getSignal(id):Once(callback)
 end
 
-function EventBus:Fire(eventId: number,  ...: any)
+function EventBus:Fire(id: number, ...)
 	local player = Players.LocalPlayer
 	local stream = self._streams[player]
 	if stream then
-		stream:event(eventId, ...)
+		stream:event(id, ...)
 	end
 end
 
-function EventBus:FireAll(eventId: number, ...: any)
+function EventBus:FireAll(id: number, ...)
 	for _, stream in pairs(self._streams) do
-		stream:event(eventId, ...)
+		stream:event(id, ...)
 	end
 end
 
-function EventBus:FireToPlayer(player: Player, eventId: number, ...: any)
+function EventBus:FireToPlayer(player: Player, id: number, ...)
 	local stream = self._streams[player]
-	if not stream then return end
+	if stream then
+		stream:event(id, ...)
+	end
+end
 
-	stream:event(eventId, ...)
+function EventBus:Call<T...>(id: number, ...: T...): (T...)
+	local player = Players.LocalPlayer
+	local stream = self._streams[player]
+	if stream then
+		return stream:call(id, ...)
+	end
+end
+
+function EventBus:CallToPlayer(player: Player, id: number, ...)
+	local stream = self._streams[player]
+	if stream then
+		return stream:call(id, ...)
+	end
+end
+
+function EventBus:OnCall<T...>(callback: (player: Player, id: number, T...) -> T...)
+	self._callHandler = callback
+	for _, stream in pairs(self._streams) do
+		stream:onCall(function(player, id, ...)
+			return callback(player, id, ...)
+		end)
+	end
 end
 
 function EventBus:StateUpdate(player: Player, id: number, value: number)
@@ -145,94 +150,62 @@ function EventBus:MoveVec(player: Player, pos: Vector3)
 	end
 end
 
-function EventBus:Stop()
-	for player, stream in pairs(self._streams) do
+function EventBus:_attach(player: Player)
+	if self._streams[player] then return end
+
+	local stream = NetStream.new(self._remote)
+	stream.TargetPlayer = player
+	stream:start(RunService:IsServer())
+
+	stream.EventHandler = function(p, id, ...)
+		local sig = self._signals[id]
+		if sig then
+			sig:Fire(p, ...)
+		end
+	end
+	if self._callHandler then
+		stream:onCall(function(player, id, ...)
+			return self._callHandler(player, id, ...)
+		end)
+	end
+
+	self._streams[player] = stream
+end
+
+function EventBus:_detach(player: Player)
+	local stream = self._streams[player]
+	if stream then
 		stream:stop()
 	end
-
-	table.clear(self._streams)
-
-	for _, sig in pairs(self._signals) do
-		sig:DisconnectAll()
-	end
-
-	table.clear(self._signals)
-end
-
-function EventBus:decode(player: Player, data: buffer, bits: number)
-	if not data or not bits then return end
-
-	local stream = self._streams[player]
-	if stream then
-		stream:decode(player, data, bits)
-	end
-end
-
-function EventBus:len(player: Player): number
-	local stream = self._streams[player]
-	if stream then
-		return stream:byteLen()
-	end
-	return 0
-end
-
-function EventBus:formatBytes(player: Player): string
-	local stream = self._streams[player]
-	if stream then
-		return stream:byteFormat(stream:bitLen())
-	end
-	return "0 b"
+	self._streams[player] = nil
 end
 
 function EventBus:OnConnect()
 	local remote = self._remote
 
 	if RunService:IsServer() then
-		local function attach(player: Player)
-			if self._streams[player] then return end
-
-			local stream = NetStream.new(remote)
-			stream.TargetPlayer = player
-			stream:start(true)
-
-			stream.EventHandler = function(p: Player, id: number, ...)
-				local signal = self._signals[id]
-				if signal then
-					signal:Fire(p, ...)
-				end
-			end
-
-			self._streams[player] = stream
-		end
-
 		for _, player in ipairs(Players:GetPlayers()) do
-			attach(player)
+			self:_attach(player)
 		end
-		local function addRoleId(id: number, name: string, color: string)
-			RoleSystem.Roles[id] = {
-				Name = name,
-				Color = color
-			}
-			return RoleSystem.Roles
-		end
-		addRoleId(7262134641, 'Owner', '#F59E0B')
 
 		Players.PlayerAdded:Connect(function(player)
-			attach(player)
-			local hex = "#3B82F6"
+			self:_attach(player)
+
 			local role = RoleSystem.Roles[player.UserId] or RoleSystem.Default
-			player:SetAttribute('RoleName', role.Name)
-			player:SetAttribute('RoleColor', role.Color)
-			task.wait(3)
-			self:FireAll(1, '[Server]: ', role.Name, player.DisplayName, player.Name, role.Color)
+			player:SetAttribute("RoleName", role.Name)
+			player:SetAttribute("RoleColor", role.Color)
+
+			task.wait(2)
+
+			self:FireAll(1, "[Server]: ", role.Name, player.DisplayName, player.Name, role.Color)
 		end)
 
 		Players.PlayerRemoving:Connect(function(player)
-			self:DetachPlayer(player)
-			self:FireAll(2, '[Server]: ', player.DisplayName, 'has left the game')
+			self:_detach(player)
+			self:FireAll(2, "[Server]: ", player.DisplayName, "left")
 		end)
 
-		remote.OnServerEvent:Connect(function(player: Player, data: buffer, bits: number)
+		remote.OnServerEvent:Connect(function(player, data, bits)
 			local stream = self._streams[player]
 			if stream then
 				stream:decode(player, data, bits)
@@ -247,10 +220,10 @@ function EventBus:OnConnect()
 
 		self._streams[player] = stream
 
-		stream.EventHandler = function(p: Player, id: number, ...)
-			local signal = self._signals[id]
-			if signal then
-				signal:Fire(p, ...)
+		stream.EventHandler = function(_, id, ...)
+			local sig = self._signals[id]
+			if sig then
+				sig:Fire(player, ...)
 			end
 		end
 
@@ -260,8 +233,12 @@ function EventBus:OnConnect()
 	end
 end
 
-function EventBus.Remote(isServer: boolean)
-	return EventBus.new(getReliable(), isServer)
+function EventBus.ReliableEvent()
+	return EventBus.new(getReliableEvent())
+end
+
+function EventBus.ReliableFunction()
+	return EventBus.new(getReliableEvent())
 end
 
 return EventBus
