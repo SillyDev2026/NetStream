@@ -53,7 +53,9 @@ ReplicatedStorage/
  │    ├── NetStream.lua
  │    ├── EventBus.lua
  │    ├── Modules/
- |    |     |-- BufferUtil.lua
+ |    |     ├── BufferUtil.lua
+ |    |     ├── BufferPool.lua
+ |    |     ├── RoleSystem.lua
  │    │     ├── BitBuffer.lua
  │    │     └── Signal.lua
  |    |          └── Promise.lua
@@ -288,41 +290,50 @@ end
 
 ### NetStream
 
-| Method | Description |
-| --------------------------------- | ------------------------------------------------------------------------------- |
-| `new(remote)` | Creates a new NetStream instance bound to a RemoteEvent used for bidirectional communication between client and server. |
-| `start(isServer)` | Starts the internal flushing loop that periodically sends queued data, adapting behavior based on queue activity and timing. |
-| `stop()` | Stops the flushing loop and disconnects internal connections, halting all outgoing network transmissions. |
-| `move(x, y, z)` | Queues a compressed movement update by quantizing position values for efficient unreliable transmission. |
-| `moveVec(Vector3)` | Wrapper for `move` that accepts a Vector3 and forwards its components as a movement update. |
-| `stateUpdate(id, value)` | Sends a state update only when the value has changed since the last send, reducing redundant network usage (unreliable). |
-| `event(eventId, ...)` | Queues a reliable event with a variable number of arguments, serializing both arguments and their count for reconstruction. |
-| `setLatest(id, value)` | Stores a key-value pair to be included as the most recent snapshot in the next flush; only the latest value per key is retained. |
-| `decode(player, data, bitLength)` | Parses incoming bit-packed data, reconstructs packets, updates player state, and dispatches events via the configured handler. |
-| `_flush(isServer?)` | Immediately serializes and sends all queued reliable, unreliable, and latest data; primarily used internally. |
-| `getPlayerState(player)` | Retrieves or initializes the cached state table associated with a player. |
-| `bitLen()` | Returns the number of bits written in the most recent outgoing packet. |
-| `byteLen()` | Returns the size of the most recent outgoing packet in bytes. |
-| `byteFormat(bits)` | Converts a bit count into a human-readable string using appropriate units (b, Kb, Mb, Gb). |
+| Method                            | Description                                                                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `new(remote)`                     | Creates a new NetStream instance bound to a RemoteEvent used as the transport layer for all encoded communication.          |
+| `start(isServer)`                 | Starts the internal flush loop (Heartbeat-driven), periodically batching and sending queued packets.                        |
+| `stop()`                          | Stops the flush loop and disconnects internal connections, preventing further network transmission.                         |
+| `move(x, y, z)`                   | Queues a compressed movement update using quantized coordinates (unreliable, high-frequency).                               |
+| `moveVec(Vector3)`                | Convenience wrapper for `move` using a Vector3 input.                                                                       |
+| `stateUpdate(id, value)`          | Sends a state update only when the value changes (delta-based, unreliable).                                                 |
+| `setLatest(id, value)`            | Stores a key-value pair that will be sent once per flush as the latest snapshot (overwrites previous values per key).       |
+| `event(eventId, ...)`             | Queues a reliable event packet with arbitrary arguments, preserving argument count and order.                               |
+| `call(id, ...)`                   | Sends a request-response RPC call (RemoteFunction-like). Yields until a response is received or times out.                  |
+| `_return(requestId, ...)`         | Internal method used to send a response back to a pending `call`.                                                           |
+| `onCall(callback)`                | Registers a handler for incoming RPC calls. Callback receives `(player, id, ...)` and should return values.                 |
+| `decode(player, data, bitLength)` | Decodes incoming packets, reconstructs operations (move, state, event, call, return), and dispatches them appropriately.    |
+| `_flush(isServer?)`               | Serializes and sends all queued packets (reliable, unreliable, latest). Called automatically but can be triggered manually. |
+| `getPlayerState(player)`          | Retrieves or initializes the cached per-player state table.                                                                 |
+| `bitLen()`                        | Returns the bit size of the last sent packet.                                                                               |
+| `byteLen()`                       | Returns the byte size of the last sent packet.                                                                              |
+| `byteFormat(bits)`                | Converts a bit count into a readable string (b, Kb, Mb, Gb).                                                                |
 
 ---
 
 ### EventBus
 
-| Method | Description |
-| ------------------------------------------ | ------------------------------------------------------------- |
-| `Remote(isServer)` | Creates an EventBus instance using a default reliable RemoteEvent, automatically creating or resolving the remote within a shared folder. |
-| `Connect(eventId, callback)` | Subscribes to a specific event ID; the callback is invoked with `(player, ...)` when the event is received. |
-| `Once(eventId, callback)` | Subscribes to a specific event ID for a single invocation, then automatically disconnects. |
-| `Fire(eventId, ...)` | Sends a reliable event through NetStream, transmitting serialized arguments across the network. |
-| `SetLatest(eventId, value, targetPlayer?)` | Sends a value to be treated as the latest state; optionally targets a specific player when used on the server. |
-| `StateUpdate(id, value)` | Sends a state update through NetStream using delta-style behavior (only when values change). |
-| `Move(x, y, z)` | Sends a compressed, unreliable movement update for position replication. |
-| `MoveVec(pos)` | Sends a Vector3-based movement update using the same underlying movement encoding. |
-| `Stop()` | Stops the underlying NetStream instance and disconnects all registered event listeners/signals. |
-| `decode(player, data, bitLength)` | Decodes incoming NetStream data and routes events and state updates to registered handlers. |
-| `len()` | Returns the size of the most recently processed packet in bytes. |
-| `formatBytes()` | Returns a human-readable string representing the size of the most recent packet. |
+| Method                                | Description                                                                                                |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `ReliableEvent()`                     | Creates an EventBus using the default RemoteEvent and NetStream transport.                                 |
+| `ReliableFunction()`                  | Creates an EventBus configured for RPC usage (internally still uses NetStream, not Roblox RemoteFunction). |
+| `Connect(eventId, callback)`          | Subscribes to a specific event ID. Callback receives `(player, ...)`.                                      |
+| `Once(eventId, callback)`             | Subscribes to an event ID for a single invocation.                                                         |
+| `Fire(eventId, ...)`                  | Sends a reliable event through NetStream to the server (client) or all clients (server).                   |
+| `FireAll(eventId, ...)`               | Sends an event to all connected players (server only).                                                     |
+| `FireToPlayer(player, eventId, ...)`  | Sends an event to a specific player (server only).                                                         |
+| `Call(id, ...)`                       | Sends an RPC request using NetStream and yields until a response is received.                              |
+| `CallToPlayer(player, id, ...)`       | Sends an RPC request to a specific player (server-side usage).                                             |
+| `OnCall(callback)`                    | Registers an RPC handler. Callback receives `(player, id, ...)` and returns response values.               |
+| `SetLatest(id, value, targetPlayer?)` | Sends a "latest state" value that overwrites previous values within the same flush cycle.                  |
+| `StateUpdate(player, id, value)`      | Sends a delta-compressed state update for a player.                                                        |
+| `Move(player, x, y, z)`               | Sends a compressed movement update for a player.                                                           |
+| `MoveVec(player, Vector3)`            | Sends a Vector3-based movement update.                                                                     |
+| `Stop()`                              | Stops all streams and disconnects all signals.                                                             |
+| `decode(player, data, bitLength)`     | Passes incoming data to NetStream for decoding and dispatch.                                               |
+| `len(player)`                         | Returns the byte size of the last packet sent for a player.                                                |
+| `formatBytes(player)`                 | Returns a formatted string of the last packet size.                                                        |
 
 ---
 ### Notes
@@ -376,7 +387,8 @@ type PlayerState = {
 ## Download here
 u will be able to access the full module without manually copy and paste and yes i did zip the module there is 0 worry about backdoors since im a dev who wants to push newer features out that are fun to use and ez without doing much overhead any suggestions join my Discord
 
-updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26389964/NetworkHandler.zip)
+updated zip [NetworkHandler.zip](https://github.com/user-attachments/files/26478359/NetworkHandler.zip)
+download so u dont have to go thru the trouble of manually coping the codes
 
 after downloading Extract all then copy it to Roblox
 
