@@ -2,6 +2,10 @@
 
 [SillyDev2026 Server](https://discord.gg/xtEMCYmuKk)
 
+# Package download if u dont want to use default download zip near the bottom
+
+[Package Link. will be updating this also](https://create.roblox.com/store/asset/127957012430992/NetworkHandler)
+
 # NetStream & EventBus for Roblox
 
 A **high-performance networking framework** for Roblox games, designed for **reliable and unreliable messaging**, **player state synchronization**, and a **flexible event bus system**. This module reduces bandwidth usage, ensures low-latency updates, and provides developers with a robust foundation for **real-time multiplayer games**.
