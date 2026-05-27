@@ -15,11 +15,14 @@ type SignalMap = { [number]: Signal.Signal<any> }
 local EventBus = {}
 EventBus.__index = EventBus
 
+local ConnectedRemotes: { [Instance]: boolean } = {}
+local BusCache: { [Instance]: any } = {}
+
+
 function getRemote(name: string, isFunction: boolean?)
 	local isServer = RunService:IsServer()
 
 	local folder = script.Parent:FindFirstChild("Remotes")
-
 	if not folder then
 		if isServer then
 			folder = Instance.new("Folder")
@@ -31,7 +34,6 @@ function getRemote(name: string, isFunction: boolean?)
 	end
 
 	local remote = folder:FindFirstChild(name)
-
 	if not remote then
 		if isServer then
 			remote = isFunction and Instance.new("RemoteFunction") or Instance.new("RemoteEvent")
@@ -56,6 +58,10 @@ end
 function EventBus.new(remote: Instance)
 	assert(remote, "Remote required")
 
+	if BusCache[remote] then
+		return BusCache[remote]
+	end
+
 	local self = setmetatable({
 		_remote = remote,
 		_streams = {},
@@ -63,9 +69,16 @@ function EventBus.new(remote: Instance)
 		_isFunction = remote:IsA("RemoteFunction"),
 	}, EventBus)
 
-	self:OnConnect()
+	BusCache[remote] = self
+
+	if not ConnectedRemotes[remote] then
+		ConnectedRemotes[remote] = true
+		self:OnConnect()
+	end
+
 	return self
 end
+
 
 function EventBus:_getSignal(id: number)
 	local sig = self._signals[id]
@@ -163,9 +176,10 @@ function EventBus:_attach(player: Player)
 			sig:Fire(p, ...)
 		end
 	end
+
 	if self._callHandler then
-		stream:onCall(function(player, id, ...)
-			return self._callHandler(player, id, ...)
+		stream:onCall(function(p, id, ...)
+			return self._callHandler(p, id, ...)
 		end)
 	end
 
@@ -180,6 +194,38 @@ function EventBus:_detach(player: Player)
 	self._streams[player] = nil
 end
 
+
+local groupId = 881354555
+local Roles = {
+	{min = 255, name = "Owner",  color = Color3.fromRGB(255, 215, 0)},
+	{min = 254, name = "Admin",  color = Color3.fromRGB(255, 80, 80)},
+	{min = 4,   name = "Elite",  color = Color3.fromRGB(120, 180, 255)},
+	{min = 3,   name = "VIP",    color = Color3.fromRGB(180, 120, 255)},
+	{min = 2,   name = "Tester", color = Color3.fromRGB(120, 255, 200)},
+	{min = 1,   name = "Member", color = Color3.fromRGB(120, 255, 120)},
+	{min = 0,   name = "Guest",  color = Color3.fromRGB(180, 180, 180)},
+}
+
+function color3ToHex(color: Color3): string
+	local r = math.floor(color.R * 255)
+	local g = math.floor(color.G * 255)
+	local b = math.floor(color.B * 255)
+
+	return string.format("#%02X%02X%02X", r, g, b)
+end
+
+function getRole(player: Player)
+	local rank = player:GetRankInGroupAsync(groupId)
+
+	for _, role in ipairs(Roles) do
+		if rank >= role.min then
+			return role.name, role.color, rank
+		end
+	end
+
+	return "Guest", Color3.fromRGB(180, 180, 180), 0
+end
+
 function EventBus:OnConnect()
 	local remote = self._remote
 
@@ -191,18 +237,23 @@ function EventBus:OnConnect()
 		Players.PlayerAdded:Connect(function(player)
 			self:_attach(player)
 
-			local role = RoleSystem.Roles[player.UserId] or RoleSystem.Default
-			player:SetAttribute("RoleName", role.Name)
-			player:SetAttribute("RoleColor", role.Color)
+			local roleName, color = getRole(player)
+			player:SetAttribute("RoleName", roleName)
 
 			task.wait(2)
-
-			self:FireAll(1, "[Server]: ", role.Name, player.DisplayName, player.Name, role.Color)
+			self:FireAll(
+				6,
+				"[Server]:",
+				roleName,
+				player.DisplayName,
+				player.Name,
+				color3ToHex(color)
+			)
 		end)
 
 		Players.PlayerRemoving:Connect(function(player)
 			self:_detach(player)
-			self:FireAll(2, "[Server]: ", player.DisplayName, "left")
+			self:FireAll(7, "[Server]: ", player.DisplayName, "left")
 		end)
 
 		remote.OnServerEvent:Connect(function(player, data, bits)
@@ -238,7 +289,7 @@ function EventBus.ReliableEvent()
 end
 
 function EventBus.ReliableFunction()
-	return EventBus.new(getReliableEvent())
+	return EventBus.new(getReliableFunction())
 end
 
 return EventBus
