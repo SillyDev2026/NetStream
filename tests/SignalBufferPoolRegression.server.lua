@@ -1,0 +1,37 @@
+--!strict
+-- Place beside the Signal, Promise, BufferPool, BitBuffer and BufferUtil ModuleScripts.
+local Signal = require(script.Parent:WaitForChild("Signal"))
+local BufferPool = require(script.Parent:WaitForChild("BufferPool"))
+local signal = Signal.new()
+local hits = 0
+local connection = signal:Connect(function(value) hits += value end)
+signal:Fire(2)
+assert(hits == 2, "Signal Fire failed")
+connection:Disconnect()
+signal:Fire(7)
+assert(hits == 2, "Disconnected listener still fired")
+local onceHits = 0
+signal:Once(function(value) onceHits += value end)
+signal:Fire(1)
+signal:Fire(1)
+assert(onceHits == 1, "Once fired twice")
+local before = 0
+local doomed = signal:Connect(function() before += 1 end)
+signal:Connect(function() doomed:Disconnect() end)
+signal:Fire()
+assert(before == 0, "Disconnect during Fire still delivered callback")
+signal:DisconnectAll()
+signal:Fire(4)
+assert(onceHits == 1, "DisconnectAll failed")
+
+local pool = BufferPool.new(64, 1)
+local first = pool:acquire()
+assert(pool:release(first), "First release failed")
+assert(not pool:release(first), "Duplicate release was accepted")
+local second = pool:acquire()
+assert(second == first, "Pooled buffer was not reused")
+assert(pool:release(second), "Second release failed")
+local extra = BufferPool.new(64):acquire()
+assert(not pool:release(extra), "Max retained count was ignored")
+assert(#pool.pool == 1, "Pool retained too many buffers")
+print("NetStream Signal + BufferPool regression PASS: 10 checks")
